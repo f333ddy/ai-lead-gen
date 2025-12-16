@@ -80,7 +80,7 @@ def update_payload_api_key():
 def update_payload_date_range():
     today = date.today()
     to_date = today
-    from_date = today - timedelta(days=1)
+    from_date = today - timedelta(days=0)
     date_range = {
         "dateStart": from_date.isoformat(),
         "dateEnd": to_date.isoformat(),
@@ -122,7 +122,7 @@ def get_eventregistry_articles() -> List[Dict]:
     print(f"Total article count received: {len(all_articles)}")    
     # return all_articles
     #Remove when moving to production
-    return all_articles[:10]
+    return all_articles[:100]
 
 # HTML CLEANUP
 def html_to_text(html: str) -> str:
@@ -415,7 +415,8 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        # emails.add("perryk@lavi.com")
+        emails.add("perryk@lavi.com")
+        emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
