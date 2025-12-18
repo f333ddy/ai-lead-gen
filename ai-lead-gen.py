@@ -43,31 +43,28 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 HUBSPOT_INDUSTRIES: List[str] = []
 
 def get_hubspot_industries() -> List[str]:
-    url = "https://api.hubapi.com/crm/v3/properties/contacts/industry_infor___updated"
+    url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
     token = os.getenv("HUBSPOT_AUTHORIZATION")
     if not token:
         print("HUBSPOT_AUTHORIZATION environment variable is not set")
         return []
-    
+
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "application/json"
+        "Accept": "application/json",
     }
 
-    res = requests.get(url, headers=headers)
     try:
+        res = requests.get(url, headers=headers, timeout=30)
         res.raise_for_status()
-    except requests.HTTPError as e:
-        print(f"Error calling HubSpot: {e} - body: {res.text}")
+    except requests.RequestException as e:
+        body = getattr(res, "text", "")
+        print(f"Error calling HubSpot: {e} - body: {body}")
         return []
-    data = res.json()
 
-    industries = [
-        opt.get("label") 
-        for opt in data.get("options", []) 
-        if opt.get("label")
-    ]
-    return industries
+    data = res.json()
+    # HubSpot returns options under: data["options"] (list of {label, value, ...})
+    return [opt["label"] for opt in data.get("options", []) if opt.get("label")]
 
 industries =  get_hubspot_industries()
 ELIGIBILITY_SCHEMA = build_eligibility_schema(industries)
