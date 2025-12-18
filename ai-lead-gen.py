@@ -454,8 +454,8 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        #emails.add("perryk@lavi.com")
-        #emails.add("will.geller@lavi.com")
+        emails.add("perryk@lavi.com")
+        emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
