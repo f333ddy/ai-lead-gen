@@ -41,6 +41,38 @@ CONFIDENCE_THRESHOLD = 0.80
 USE_PREFILTER = True  # toggle the cheap keyword/regex prefilter to save tokens
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 HUBSPOT_INDUSTRIES: List[str] = []
+INDUSTRY_VALUE_TO_LABEL: Dict[str, str] = {}
+
+def build_hubspot_industries_label_to_value_map():
+    url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
+    token = os.getenv("HUBSPOT_AUTHORIZATION")
+    if not token:
+        print("HUBSPOT_AUTHORIZATION environment variable is not set")
+        INDUSTRY_VALUE_TO_LABEL = {}
+        return INDUSTRY_VALUE_TO_LABEL
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    try:
+        res = requests.get(url, headers=headers, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        body = getattr(res, "text", "")
+        print(f"Error calling HubSpot: {e} - body: {body}")
+        INDUSTRY_VALUE_TO_LABEL = {}
+        return INDUSTRY_VALUE_TO_LABEL
+
+    data = res.json()
+
+    INDUSTRY_VALUE_TO_LABEL = {
+        opt["value"]: opt["label"]
+        for opt in data.get("options", [])
+        if opt.get("value") and opt.get("label")
+    }
+    return INDUSTRY_VALUE_TO_LABEL
 
 def get_hubspot_industries() -> List[str]:
     url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
@@ -67,6 +99,8 @@ def get_hubspot_industries() -> List[str]:
     return [opt["label"] for opt in data.get("options", []) if opt.get("label")]
 
 industries =  get_hubspot_industries()
+print("Industries: ")
+print(json.dumps(industries, indent=2))
 ELIGIBILITY_SCHEMA = build_eligibility_schema(industries)
 
 
@@ -119,7 +153,7 @@ def get_eventregistry_articles() -> List[Dict]:
     print(f"Total article count received: {len(all_articles)}")    
     # return all_articles
     #Remove when moving to production
-    return all_articles[:100]
+    return all_articles[:10]
 
 # HTML CLEANUP
 def html_to_text(html: str) -> str:
@@ -217,7 +251,7 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
     return results
 
 def get_hubspot_raw_industry_team_mappings():
-    url = "https://api.hubapi.com/crm/v3/objects/2-53919775?limit=100&properties=industry_label,team_id"
+    url = "https://api.hubapi.com/crm/v3/objects/2-54755382?limit=100&properties=industry,team"
     token = os.getenv("HUBSPOT_AUTHORIZATION")
     if not token:
         print("HUBSPOT_AUTHORIZATION environment variable is not set")
@@ -235,22 +269,33 @@ def get_hubspot_raw_industry_team_mappings():
         print(f"Error calling HubSpot: {e} - body: {res.text}")
         return []
     data = res.json()
-    raw_industry_team_mappings = data["results"]
-    return raw_industry_team_mappings
+    return data
 
-def build_industry_to_teams_map(raw_industry_team_mappings):
+def build_industry_to_teams_map(raw_industry_team_mappings: dict) -> Dict[str, Set[str]]:
     industry_to_teams_map: Dict[str, Set[str]] = {}
+    print("Inside build_industry_to_teams_map")
+    for record in raw_industry_team_mappings.get("results", []) or []:
+        print("Got record")
+        props = record.get("properties", {}) or {}
 
-    for record in raw_industry_team_mappings:
-        props = record.get("properties", {})
-        industry_label = props.get("industry_label")
-        team_id = props.get("team_id")
-
-        if not industry_label or not team_id:
+        industry_value = props.get("industry")  # e.g. "HRS000"
+        team_value = props.get("team")          # e.g. "team_id_58816923"
+        print("Props:")
+        print(json.dumps(props, indent=2))
+        if not industry_value or not team_value:
             continue
-        if industry_label not in industry_to_teams_map:
-            industry_to_teams_map[industry_label] = set()
-        industry_to_teams_map[industry_label].add(team_id)
+
+        industry_label = INDUSTRY_VALUE_TO_LABEL.get(industry_value)
+        if not industry_label:
+            # Skip if we can't translate internal value -> label
+            # (or set industry_label = industry_value if you'd rather keep it)
+            continue
+
+        team_id = team_value.removeprefix("team_id_")
+        print(f"Got industr label {industry_label} for team_id {team_id}")
+
+        industry_to_teams_map.setdefault(industry_label, set()).add(team_id)
+
     return industry_to_teams_map
 
 def bucket_articles_by_team(
@@ -412,8 +457,8 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        emails.add("perryk@lavi.com")
-        emails.add("will.geller@lavi.com")
+        #emails.add("perryk@lavi.com")
+        #emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
@@ -436,6 +481,9 @@ def test_send_emails_to_teams(team_buckets):
         print(f"Email sent to team {team_id} ({len(emails)} recipients).")
 
 if __name__ == "__main__":
+    INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
+    print("INDUSTRY_VALUE_TO_LABEL")
+    print(json.dumps(INDUSTRY_VALUE_TO_LABEL, indent=2))
     # industries = get_hubspot_industries()
     articles = get_eventregistry_articles()
     print("Got all event registry articles")
@@ -445,7 +493,11 @@ if __name__ == "__main__":
     print("out: ")
     print(json.dumps(out, indent=2))
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
+    print("Raw industry teamp mappings: ")
+    print(json.dumps(raw_industry_team_mappings, indent=2))
     industry_to_teams_map = build_industry_to_teams_map(raw_industry_team_mappings)
+    #print("Industry to teams map: ")
+    #print(json.dumps(industry_to_teams_map, indent=2))
     # Returns {"distributor": ["1453", "0549"]}
     # team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
     team_buckets = test_bucket_articles_by_team(out, industry_to_teams_map)
