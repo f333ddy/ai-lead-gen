@@ -153,7 +153,7 @@ def get_eventregistry_articles() -> List[Dict]:
     print(f"Total article count received: {len(all_articles)}")    
     # return all_articles
     #Remove when moving to production
-    return all_articles[:10]
+    return all_articles
 
 # HTML CLEANUP
 def html_to_text(html: str) -> str:
@@ -241,13 +241,10 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
         confidence = float(content.get("confidence", 0.0))
         print("Results of AI Analysis")
         print(json.dumps(content, indent=2))
-        extracted["is_filtered"] = True
-        extracted["is_included"] = False
-        if eligible:
+        if eligible and confidence >= CONFIDENCE_THRESHOLD:
             #print("Eligible content:")
             #print(json.dumps(content, indent=2))
-            extracted["is_filtered"] = False
-        results.append(extracted)
+            results.append(extracted)
     return results
 
 def get_hubspot_raw_industry_team_mappings():
@@ -499,8 +496,8 @@ if __name__ == "__main__":
     #print("Industry to teams map: ")
     #print(json.dumps(industry_to_teams_map, indent=2))
     # Returns {"distributor": ["1453", "0549"]}
-    # team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
-    team_buckets = test_bucket_articles_by_team(out, industry_to_teams_map)
+    team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
+    # team_buckets = test_bucket_articles_by_team(out, industry_to_teams_map)
     print("Team buckets: ")
     print(json.dumps(team_buckets, indent=2))
     #How should we handle len(out) == 0? New template or no email?

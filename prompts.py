@@ -9,7 +9,7 @@ GATE_SYSTEM = (
     "HARD RULE: eligible can be true ONLY IF ALL conditions are met: "
     "(1) confidence >= 0.8, "
     "(2) evidence_spans contains at least one supporting quote/excerpt faithful to the text (minor edits for brevity are OK, do not change meaning), AND "
-    "(3) extracted.industries is non-empty and contains only values from the provided INDUSTRIES list. "
+    "(3) extracted.industries is non-empty and contains only values from the provided INDUSTRIES list. You can use the GENERAL tag only when there's no appropriate tag in the INDUSTRIES list. In the scenario when GENERAL tag is used, extracted.industries has only this tag."
     "If any condition is not met, eligible must be false."
 )
 

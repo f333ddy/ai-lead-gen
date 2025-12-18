@@ -46,8 +46,6 @@ test_template_str = """
             <th>AI Summary</th>
             <th>Company</th>
             <th>Industries</th>
-            <th>IsFiltered</th>
-            <th>IsIncluded</th>
         </tr>
         {% for row in rows %}
             <tr>
@@ -59,8 +57,6 @@ test_template_str = """
                 <td>{{row.summary}}</td>
                 <td>{{row.company}}</td>
                 <td>{{", ".join(row.industries)}}</td>
-                <td>{{row.is_filtered}}</td>
-                <td>{{row.is_included}}</td>
             </tr>
         {% endfor %}
     </table>
