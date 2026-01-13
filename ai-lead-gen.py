@@ -42,6 +42,8 @@ USE_PREFILTER = True  # toggle the cheap keyword/regex prefilter to save tokens
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 HUBSPOT_INDUSTRIES: List[str] = []
 INDUSTRY_VALUE_TO_LABEL: Dict[str, str] = {}
+FILTERED_RESULTS: List[Dict[str, Any]] = []
+
 
 def build_hubspot_industries_label_to_value_map():
     url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
@@ -245,6 +247,8 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
             #print("Eligible content:")
             #print(json.dumps(content, indent=2))
             results.append(extracted)
+        else:
+            FILTERED_RESULTS.append(extracted)
     return results
 
 def get_hubspot_raw_industry_team_mappings():
@@ -476,6 +480,25 @@ def test_send_emails_to_teams(team_buckets):
         )
 
         print(f"Email sent to team {team_id} ({len(emails)} recipients).")
+    
+def send_filtered_email():
+    print("Going to send out filtered email...")
+    emails = set()
+    emails.add("perryk@lavi.com")
+    emails.add("will.geller@lavi.com")
+    emails.add("federico.aguilar@lavi.com")
+    subject = f"Filtered Articles"
+    template = Template(test_template_str)
+    html_body = template.render(
+        title = subject,
+        intro_text = "Below are the articles that were filtered:",
+        rows=FILTERED_RESULTS
+    )
+    send_html_email(
+        to_emails = list(emails),
+        subject=subject,
+        html_body=html_body
+    )
 
 if __name__ == "__main__":
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
@@ -503,3 +526,4 @@ if __name__ == "__main__":
     #How should we handle len(out) == 0? New template or no email?
     #send_emails_to_teams(team_buckets)
     test_send_emails_to_teams(team_buckets)
+    send_filtered_email()
