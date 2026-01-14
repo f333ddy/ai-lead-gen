@@ -11,7 +11,7 @@ load_dotenv()
 # pip install openai beautifulsoup4
 from openai import OpenAI
 from pydantic import BaseModel
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import requests
 import copy
 try:
@@ -501,6 +501,7 @@ def send_filtered_email():
     )
 
 if __name__ == "__main__":
+    print("Date: ", datetime.now())
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("INDUSTRY_VALUE_TO_LABEL")
     print(json.dumps(INDUSTRY_VALUE_TO_LABEL, indent=2))
