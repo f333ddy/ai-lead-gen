@@ -28,3 +28,6 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# Cron
+cron.log
