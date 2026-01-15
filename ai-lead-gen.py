@@ -461,8 +461,8 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        #emails.add("perryk@lavi.com")
-        #emails.add("will.geller@lavi.com")
+        emails.add("perryk@lavi.com")
+        emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
@@ -489,8 +489,8 @@ def test_send_emails_to_teams(team_buckets):
 def send_filtered_email():
     print("Going to send out filtered email...")
     emails = set()
-    #emails.add("perryk@lavi.com")
-    #emails.add("will.geller@lavi.com")
+    emails.add("perryk@lavi.com")
+    emails.add("will.geller@lavi.com")
     emails.add("federico.aguilar@lavi.com")
     count = len(FILTERED_RESULTS)
     plural = "Articles" if count != 1 else "Article"
@@ -498,7 +498,7 @@ def send_filtered_email():
     template = Template(test_template_str)
     html_body = template.render(
         title = subject,
-        intro_text = "Below are articles that the model evaluated and filtered out based on current eligibility criteria. Please review to identify potential false negatives or rule gaps.",
+        intro_text = "The AI model has evaluated and filtered out the articles below based on current eligibility criteria. Please review to identify potential false negatives or rule gaps.",
         rows=FILTERED_RESULTS
     )
     send_html_email(
