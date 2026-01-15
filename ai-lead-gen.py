@@ -111,7 +111,7 @@ def update_payload_api_key():
     ARTICLES_PAYLOAD["apiKey"] = api_key
 
 def update_payload_date_range():
-    today = date.today()
+    today = date.today() 
     to_date = today
     from_date = today - timedelta(days=0)
     date_range = {
@@ -143,6 +143,7 @@ def get_eventregistry_articles() -> List[Dict]:
                 "description": a.get("body"),
             }
             for a in articles_obj.get("results", [])
+            if not a.get("isDuplicate", False)
         ]
 
     first_articles = fetch_articles_page(1)
@@ -418,11 +419,13 @@ def send_emails_to_teams(team_buckets):
 
         # Send email
         team_name = team_id_to_name[team_id]
-        subject = f"[News Digest] Team {team_name}"
+        count = len(articles)
+        plural = "Opportunities" if count != 1 else "Opportunity"
+        subject = f"[Business Signals] Team {team_name} - {count} New {plural} Identified"
         template = Template(template_str)
         html_body = template.render(
             title= subject,
-            intro_text="Here is your report:",
+            intro_text="Below are newly identified business signals that may indicate near-term opportunities for your team.",
             rows=articles
         )
         send_html_email(
@@ -458,19 +461,21 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        emails.add("perryk@lavi.com")
-        emails.add("will.geller@lavi.com")
+        #emails.add("perryk@lavi.com")
+        #emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
         # Send email
         team_name = team_id_to_name[team_id]
-        subject = f"[News Digest] Team {team_name}"
+        count = len(articles)
+        plural = "Opportunities" if count != 1 else "Opportunity"
+        subject = f"[Business Signals] Team {team_name} - {count} New {plural} Identified"
         template = Template(test_template_str)
         print(json.dumps(articles, indent=2))
         html_body = template.render(
             title= subject,
-            intro_text="Here is your report:",
+            intro_text="Below are newly identified business signals that may indicate near-term opportunities for your team.",
             rows=articles
         )
         send_html_email(
@@ -484,14 +489,16 @@ def test_send_emails_to_teams(team_buckets):
 def send_filtered_email():
     print("Going to send out filtered email...")
     emails = set()
-    emails.add("perryk@lavi.com")
-    emails.add("will.geller@lavi.com")
+    #emails.add("perryk@lavi.com")
+    #emails.add("will.geller@lavi.com")
     emails.add("federico.aguilar@lavi.com")
-    subject = f"Filtered Articles"
+    count = len(FILTERED_RESULTS)
+    plural = "Articles" if count != 1 else "Article"
+    subject = f"[QA Review] {count} {plural} Filtered by Eligiblity Gate"
     template = Template(test_template_str)
     html_body = template.render(
         title = subject,
-        intro_text = "Below are the articles that were filtered:",
+        intro_text = "Below are articles that the model evaluated and filtered out based on current eligibility criteria. Please review to identify potential false negatives or rule gaps.",
         rows=FILTERED_RESULTS
     )
     send_html_email(
