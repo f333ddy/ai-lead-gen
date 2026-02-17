@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import re
 import json
@@ -461,8 +462,8 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        emails.add("perryk@lavi.com")
-        emails.add("will.geller@lavi.com")
+        #emails.add("perryk@lavi.com")
+        #emails.add("will.geller@lavi.com")
         print("Emails found: ")
         print(json.dumps(list(emails), indent=2))
 
@@ -489,8 +490,8 @@ def test_send_emails_to_teams(team_buckets):
 def send_filtered_email():
     print("Going to send out filtered email...")
     emails = set()
-    emails.add("perryk@lavi.com")
-    emails.add("will.geller@lavi.com")
+    #emails.add("perryk@lavi.com")
+    #emails.add("will.geller@lavi.com")
     emails.add("federico.aguilar@lavi.com")
     count = len(FILTERED_RESULTS)
     plural = "Articles" if count != 1 else "Article"
@@ -507,14 +508,61 @@ def send_filtered_email():
         html_body=html_body
     )
 
-if __name__ == "__main__":
+def get_airport_industry_news(
+        index_url: str = "https://airportindustry-news.com/news/",
+        timeout: int = 20,
+        user_agent: str = "Mozilla/5.0 (compatible; NewsScraper/1.0; +https://example.com/bot)"
+    ) -> List[Dict[str, str]]:
+    session = requests.Session()
+    session.headers.update({"User-Agent": user_agent})
+    resp = session.get(index_url, timeout=timeout)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    urls: List[str] = []
+    for a in soup.select("a.cards__link--post[href]"):
+        href = a.get("href", "").strip()
+        if not href:
+            continue
+        if href.startswith("/"):
+            href = "https://airportindustry-news.com" + href
+        urls.append(href)
+    seen = set()
+    urls = [u for u in urls if not (u in seen or seen.add(u))]
+    articles: List[Dict[str, str]] = []
+    for url in urls:
+        article_data: Dict[str, str] = {"link": url, "title": "", "description": ""}
+        try:
+            r = session.get(url, timeout=timeout)
+            r.raise_for_status()
+            page = BeautifulSoup(r.text, "html.parser")
+            # Title
+            h1 = page.select_one("h1.scroller__heading")
+            if h1:
+                article_data["title"] = h1.get_text(strip=True)
+            #Description
+            description_parts: List[str] = []
+            body = page.select_one("article.article__body")
+            if body:
+                for p in body.select("p"):
+                    txt = p.get_text(" ", strip=True)
+                    if txt:
+                        description_parts.append(txt)
+            article_data["description"] = "\n\n".join(description_parts)
+        except requests.RequestException:
+            pass
+        articles.append(article_data)
+    return articles
+
+
+if __name__ == "__main__": 
     print("Date: ", datetime.now())
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("INDUSTRY_VALUE_TO_LABEL")
     print(json.dumps(INDUSTRY_VALUE_TO_LABEL, indent=2))
     # industries = get_hubspot_industries()
-    articles = get_eventregistry_articles()
-    print("Got all event registry articles")
+    articles_event_registry = get_eventregistry_articles()
+    articles_airport_industry_news = get_airport_industry_news()
+    articles = articles_event_registry + articles_airport_industry_news
     # out = run_eligibility_gate(articles)
     out = test_run_eligibility_gate(articles)
 
