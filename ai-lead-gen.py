@@ -6,6 +6,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Dict, Any, Optional, Set, Iterable
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
@@ -553,6 +554,100 @@ def get_airport_industry_news(
         articles.append(article_data)
     return articles
 
+def get_nacs_articles(
+    only_today: bool = True,
+    timeout: int = 15,
+    user_agent: str = "Mozilla/5.0 (compatible; NACSNewsScraper/1.0)",
+    rss_url: str = "https://www.convenience.org/Convenience.org/ApplicationPages/NewsRSS.aspx",
+    source_url: str = "https://www.convenience.org/"
+) -> List[Dict[str, str]]:
+    """
+    Fetch NACS RSS items and enrich them by scraping each article page.
+    Returns list of dicts with: title, link, date, description, source.
+
+    Args:
+        only_today: if True, returns only items whose pubDate is today (local time).
+                   if False, returns all items in the RSS feed.
+    """
+    session = requests.Session()
+    session.headers.update({"User-Agent": user_agent})
+
+    # --- Fetch RSS ---
+    resp = session.get(rss_url, timeout=timeout)
+    resp.raise_for_status()
+
+    root = ET.fromstring(resp.content)
+    channel = root.find("channel")
+    if channel is None:
+        raise RuntimeError("RSS feed does not contain a <channel> element.")
+
+    today = datetime.now().date()
+    items: List[Dict[str, object]] = []
+
+    # --- Parse RSS items ---
+    for item in channel.findall("item"):
+        title_el = item.findtext("title")
+        link_el = item.findtext("link")
+        pub_text = item.findtext("pubDate")
+
+        if not (title_el and link_el and pub_text):
+            continue
+
+        # NACS feed uses: "MM/DD/YYYY HH:MM:SS AM/PM"
+        pub_dt = None
+        for fmt in ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p"):
+            try:
+                pub_dt = datetime.strptime(pub_text.strip(), fmt)
+                break
+            except ValueError:
+                pass
+
+        if pub_dt is None:
+            continue
+
+        if only_today and pub_dt.date() != today:
+            continue
+
+        items.append({"title": title_el.strip(), "link": link_el.strip(), "date": pub_dt})
+
+    # --- Helper: scrape article body ---
+    def _extract_body(url: str) -> str:
+        try:
+            r = session.get(url, timeout=timeout)
+            r.raise_for_status()
+        except requests.RequestException:
+            return ""
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        content_div = soup.find("div", class_="nacs-page-content")
+        if not content_div:
+            return ""
+
+        paragraphs = []
+        for p in content_div.find_all("p"):
+            txt = p.get_text(" ", strip=True)
+            if txt:
+                paragraphs.append(txt)
+
+        return "\n\n".join(paragraphs)
+
+    # --- Enrich items with description ---
+    results: List[Dict[str, str]] = []
+    for it in items:
+        link = str(it["link"])
+        body = _extract_body(link)
+
+        results.append(
+            {
+                "title": str(it["title"]),
+                "link": link,
+                "date": str(it["date"].isoformat()),
+                "description": body,
+                "source": source_url,
+            }
+        )
+
+    return results
 
 if __name__ == "__main__": 
     print("Date: ", datetime.now())
@@ -562,7 +657,9 @@ if __name__ == "__main__":
     # industries = get_hubspot_industries()
     articles_event_registry = get_eventregistry_articles()
     articles_airport_industry_news = get_airport_industry_news()
-    articles = articles_event_registry + articles_airport_industry_news
+    articles_nacs = get_nacs_articles()
+    
+    articles = articles_event_registry + articles_airport_industry_news + articles_nacs
     # out = run_eligibility_gate(articles)
     out = test_run_eligibility_gate(articles)
 
