@@ -25,6 +25,8 @@ from email_template import template_str, test_template_str
 from eligibility_schema import build_eligibility_schema
 from prompts import GATE_SYSTEM, GATE_USER_TMPL
 from event_registry import ARTICLES_PAYLOAD
+from urllib.parse import urljoin
+from playwright.sync_api import sync_playwright
 
 # Global Variables
 KEYWORDS = [
@@ -649,20 +651,175 @@ def get_nacs_articles(
 
     return results
 
+def get_chainstoreage_news(index_url: str = "https://chainstoreage.com/news") -> List[Dict[str, str]]:
+    urls: List[str] = []
+    articles: List[Dict[str, str]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        # Load listing page
+        page.goto(index_url, wait_until="networkidle", timeout=60_000)
+
+        # Collect links from listing page
+        # a) anchors inside div.teaser-card__content
+        teaser_links = page.eval_on_selector_all(
+            "div.teaser-card__content a[href]",
+            "els => els.map(a => a.getAttribute('href'))"
+        )
+
+        # b) anchors with class heading__link
+        heading_links = page.eval_on_selector_all(
+            "a.heading__link[href]",
+            "els => els.map(a => a.getAttribute('href'))"
+        )
+
+        raw_links = (teaser_links or []) + (heading_links or [])
+        for href in raw_links:
+            if not href:
+                continue
+            urls.append(urljoin(index_url, href))
+
+        # de-dupe preserve order
+        seen = set()
+        urls = [u for u in urls if not (u in seen or seen.add(u))]
+
+        # Visit each URL and extract fields
+        for url in urls:
+            article = {
+                "title": "",
+                "link": url,
+                "description": "",
+                "published_date": "",
+            }
+
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+
+            # title: <h2> inside <section.news-brief>
+            h2 = page.locator("section.news-brief h2").first
+            if h2.count() > 0:
+                article["title"] = h2.inner_text().strip()
+
+            # published_date: <div class="date">
+            d = page.locator("div.date").first
+            if d.count() > 0:
+                article["published_date"] = d.inner_text().strip()
+
+            # description: collect text from <p> inside section.news-brief
+            # This preserves inline link text like your <a><em><u>...</u></em></a> example.
+            ps = page.locator("section.news-brief p")
+            parts: List[str] = []
+            for i in range(ps.count()):
+                txt = ps.nth(i).inner_text().strip()
+                if txt:
+                    parts.append(" ".join(txt.split()))
+
+            article["description"] = "\n\n".join(parts)
+            articles.append(article)
+
+        browser.close()
+
+    return articles
+
+def get_nahb_articles(
+    index_url: str = "https://www.nahb.org/blog/blog-search#sort=%40cz95xpublishz95xdate%20descending",
+    timeout_ms: int = 60_000,
+    headless: bool = True,
+) -> List[Dict[str, str]]:
+    """
+    Scrape NAHB blog search results and visit each article to extract:
+      - title: <h1 class="page-title__title">
+      - link: url
+      - description: all <p> inside <div class="rich-text"> stitched together
+      - date: <time class="page-meta__date">
+    """
+    articles: List[Dict[str, str]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        context = browser.new_context()
+        page = context.new_page()
+
+        # 1) Go to listing page (hash route)
+        page.goto(index_url, wait_until="networkidle", timeout=timeout_ms)
+
+        # Wait until the search cards are present
+        page.wait_for_selector("div.search-card__title a[href]", timeout=timeout_ms)
+
+        # 2) Collect URLs from <div class="search-card__title"> <a href="...">
+        hrefs = page.eval_on_selector_all(
+            "div.search-card__title a[href]",
+            "els => els.map(a => a.getAttribute('href'))"
+        )
+
+        base = "https://www.nahb.org"
+        urls: List[str] = []
+        for href in hrefs or []:
+            if not href:
+                continue
+            urls.append(urljoin(base, href.strip()))
+
+        # de-dupe while preserving order
+        seen = set()
+        urls = [u for u in urls if not (u in seen or seen.add(u))]
+
+        # 3) Iterate each URL and build article dict
+        for url in urls:
+            data: Dict[str, str] = {
+                "title": "",
+                "link": url,
+                "description": "",
+                "date": "",
+            }
+
+            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+
+            # title
+            title_loc = page.locator("h1.page-title__title").first
+            if title_loc.count() > 0:
+                data["title"] = title_loc.inner_text().strip()
+
+            # date
+            date_loc = page.locator("time.page-meta__date").first
+            if date_loc.count() > 0:
+                data["date"] = date_loc.inner_text().strip()
+
+            # description: all <p> within <div class="rich-text">
+            ps = page.locator("div.rich-text p")
+            parts: List[str] = []
+            for i in range(ps.count()):
+                txt = ps.nth(i).inner_text().strip()
+                if txt:
+                    # normalize whitespace
+                    parts.append(" ".join(txt.split()))
+            data["description"] = "\n\n".join(parts)
+
+            articles.append(data)
+
+        browser.close()
+
+    return articles
+
+
 if __name__ == "__main__": 
     print("Date: ", datetime.now())
-    INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
+    #INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("INDUSTRY_VALUE_TO_LABEL")
     print(json.dumps(INDUSTRY_VALUE_TO_LABEL, indent=2))
     # industries = get_hubspot_industries()
     articles_event_registry = get_eventregistry_articles()
     articles_airport_industry_news = get_airport_industry_news()
     articles_nacs = get_nacs_articles()
-    
-    articles = articles_event_registry + articles_airport_industry_news + articles_nacs
-    # out = run_eligibility_gate(articles)
-    out = test_run_eligibility_gate(articles)
+    articles_nahb = get_nahb_articles()
+    #articles_stadia = get_stadia()
+    #articles_chainstoreage = get_chainstoreage_news()
 
+    articles = articles_event_registry + articles_airport_industry_news + articles_nacs + articles_nahb
+    out = run_eligibility_gate(articles)
+
+    
+    out = test_run_eligibility_gate(articles)
     print("out: ")
     print(json.dumps(out, indent=2))
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
@@ -680,3 +837,4 @@ if __name__ == "__main__":
     #send_emails_to_teams(team_buckets)
     test_send_emails_to_teams(team_buckets)
     send_filtered_email()
+    
