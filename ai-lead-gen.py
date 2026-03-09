@@ -139,7 +139,7 @@ def get_eventregistry_articles() -> List[Dict]:
         return response.json().get("articles", {})
 
     def extract_articles(articles_obj: Dict) -> List[Dict]:
-        print(f"Fetched page {articles_obj.get('page', 1)} of {articles_obj.get('pages', 1)}")
+        #print(f"Fetched page {articles_obj.get('page', 1)} of {articles_obj.get('pages', 1)}")
         return [
             {
                 "title": a.get("title"),
@@ -157,7 +157,7 @@ def get_eventregistry_articles() -> List[Dict]:
     for page in range(2, total_pages + 1):
         all_articles.extend(extract_articles(fetch_articles_page(page)))
 
-    print(f"Total article count received: {len(all_articles)}")    
+    print(f"Total article from eventregistry: {len(all_articles)}")    
     # return all_articles
     #Remove when moving to production
     return all_articles
@@ -200,31 +200,21 @@ def send_html_email(to_emails: List[str], subject: str, html_body: str, from_ema
 
 def run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
-
+    count = 0
     for obj in items:
+        count += 1
         raw_html = obj.get("description", "")
         link = obj.get("link", None)
         title = obj.get("title", "")
 
         text = html_to_text(raw_html)
 
-        # Call the gate
         content = call_gate(text, link, title)
-        # Enforce business policy / defaults
         extracted = content.setdefault("extracted", {})
-        # extracted.setdefault("article_link", link)
         eligible = bool(content.get("eligible"))
         confidence = float(content.get("confidence", 0.0))
-        '''
-        print("Content")
-        print(json.dumps(content, indent=2))
-        '''
-        print("...parsing")
-        # Only include decisions that are eligible AND above confidence threshold
+
         if eligible and confidence >= CONFIDENCE_THRESHOLD:
-            print("Eligible content:")
-            print(json.dumps(extracted, indent=2))
-            #decision = {"content": content}
             results.append(extracted)
 
     return results
@@ -236,21 +226,16 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
         raw_html = obj.get("description", "")
         link = obj.get("link", None)
         title = obj.get("title", "")
+        print(f"Analyzing {title}...")
 
         text = html_to_text(raw_html)
 
-        # Call the gate
         content = call_gate(text, link, title)
-        # Enforce business policy / defaults
         extracted = content.setdefault("extracted", {})
-        # extracted.setdefault("article_link", link)
         eligible = bool(content.get("eligible"))
         confidence = float(content.get("confidence", 0.0))
-        print("Results of AI Analysis")
-        print(json.dumps(content, indent=2))
+
         if eligible and confidence >= CONFIDENCE_THRESHOLD:
-            #print("Eligible content:")
-            #print(json.dumps(content, indent=2))
             results.append(extracted)
         else:
             FILTERED_RESULTS.append(extracted)
@@ -330,7 +315,7 @@ def bucket_articles_by_team(
         # add the article to each of those buckets
         for team_id in team_buckets_to_add_article_to:
             team_buckets[team_id].append(article)
-
+    
     return dict(team_buckets)
 
 def test_bucket_articles_by_team(
@@ -554,6 +539,7 @@ def get_airport_industry_news(
         except requests.RequestException:
             pass
         articles.append(article_data)
+    print(f"Total article from eventregistry: {len(articles)}")    
     return articles
 
 def get_nacs_articles(
@@ -649,6 +635,7 @@ def get_nacs_articles(
             }
         )
 
+    print(f"Total article from eventregistry: {len(results)}")    
     return results
 
 def get_chainstoreage_news(index_url: str = "https://chainstoreage.com/news") -> List[Dict[str, str]]:
@@ -798,13 +785,13 @@ def get_nahb_articles(
             articles.append(data)
 
         browser.close()
-
+    print(f"Total article from eventregistry: {len(articles)}")    
     return articles
 
 
 if __name__ == "__main__": 
     print("Date: ", datetime.now())
-    #INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
+    INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("INDUSTRY_VALUE_TO_LABEL")
     print(json.dumps(INDUSTRY_VALUE_TO_LABEL, indent=2))
     # industries = get_hubspot_industries()
@@ -816,19 +803,13 @@ if __name__ == "__main__":
     #articles_chainstoreage = get_chainstoreage_news()
 
     articles = articles_event_registry + articles_airport_industry_news + articles_nacs + articles_nahb
-    out = run_eligibility_gate(articles)
-
+    #out = run_eligibility_gate(articles)
     
     out = test_run_eligibility_gate(articles)
-    print("out: ")
-    print(json.dumps(out, indent=2))
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
     print("Raw industry teamp mappings: ")
     print(json.dumps(raw_industry_team_mappings, indent=2))
     industry_to_teams_map = build_industry_to_teams_map(raw_industry_team_mappings)
-    #print("Industry to teams map: ")
-    #print(json.dumps(industry_to_teams_map, indent=2))
-    # Returns {"distributor": ["1453", "0549"]}
     team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
     # team_buckets = test_bucket_articles_by_team(out, industry_to_teams_map)
     print("Team buckets: ")
