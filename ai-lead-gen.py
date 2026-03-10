@@ -27,6 +27,7 @@ from prompts import GATE_SYSTEM, GATE_USER_TMPL
 from event_registry import ARTICLES_PAYLOAD
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
+from email.utils import parsedate_to_datetime
 
 # Global Variables
 KEYWORDS = [
@@ -35,7 +36,7 @@ KEYWORDS = [
     "grant awarded", "grant approval", "bond measure", "capital budget",
     "capital improvement plan", "CIP",
     # project signals
-    "renovation", "remodel", "expansion", "build-out", "facility upgrade", "project"
+    "renovation", "remodel", "expansion", "build-out", "facility upgrade", "project",
     # procurement
     "RFP", "RFQ", "solicitation", "procurement",
 ]
@@ -478,9 +479,9 @@ def test_send_emails_to_teams(team_buckets):
 def send_filtered_email():
     print("Going to send out filtered email...")
     emails = set()
-    #emails.add("perryk@lavi.com")
-    #emails.add("will.geller@lavi.com")
     emails.add("federico.aguilar@lavi.com")
+    emails.add("will.geller@lavi.com")
+    emails.add("perryk@lavi.com")
     count = len(FILTERED_RESULTS)
     plural = "Articles" if count != 1 else "Article"
     subject = f"[QA Review] {count} {plural} Filtered by Eligiblity Gate"
@@ -788,6 +789,80 @@ def get_nahb_articles(
     print(f"Total article from eventregistry: {len(articles)}")    
     return articles
 
+def get_ein_presswire(
+        rss_url: str = "https://world.einnews.com/rss/nijykgp60Vt68JDt",
+        timeout: int = 20,
+        user_agent: str = "Mozilla/5.0 (compatible; EINPresswireScraper/1.0)"
+) -> List[Dict[str, str]]:
+    articles: List[Dict[str, str]] = []
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": user_agent})
+    
+    resp = session.get(rss_url, timeout=timeout)
+    resp.raise_for_status()
+
+    root = ET.fromstring(resp.content)
+    today = datetime.utcnow().date()
+
+    for item in root.findall(".//item"):
+        link = (item.findtext("link") or "").strip()
+        title = (item.findtext("title") or "").strip()
+        pub_date_raw = (item.findtext("pubDate") or "").strip()
+
+        if not link or not title or not pub_date_raw:
+            continue
+
+        try:
+            pub_date = parsedate_to_datetime(pub_date_raw).date()
+        except Exception:
+            continue
+
+        if pub_date < today:
+            break
+
+        article = {
+            "link": link,
+            "title": title,
+            "description": "",
+        }
+
+        try:
+            page_resp = session.get(link, timeout=timeout)
+            page_resp.raise_for_status()
+            soup = BeautifulSoup(page_resp.text, "html.parser")
+
+            description_parts: List[str] = []
+            body = soup.find("div", class_="Article-bodyContent")
+
+            if body:
+                for p in body.find_all("p"):
+                    parts: List[str] = []
+
+                    for child in p.contents:
+                        if isinstance(child, str):
+                            txt = child.strip()
+                            if txt:
+                                parts.append(txt)
+                        elif getattr(child, "name", None) == "span":
+                            a = child.find("a")
+                            if a:
+                                txt = a.get_text(" ", strip=True)
+                                if txt:
+                                    parts.append(txt)
+
+                    paragraph_text = " ".join(parts).strip()
+                    if paragraph_text:
+                        description_parts.append(paragraph_text)
+
+            article["description"] = "\n\n".join(description_parts)
+
+        except requests.RequestException:
+            pass
+
+        articles.append(article)
+    return articles
+
 
 if __name__ == "__main__": 
     print("Date: ", datetime.now())
@@ -799,9 +874,10 @@ if __name__ == "__main__":
     articles_airport_industry_news = get_airport_industry_news()
     articles_nacs = get_nacs_articles()
     articles_nahb = get_nahb_articles()
+
     #articles_stadia = get_stadia()
     #articles_chainstoreage = get_chainstoreage_news()
-
+    articles_ein_presswire = get_ein_presswire()
     articles = articles_event_registry + articles_airport_industry_news + articles_nacs + articles_nahb
     #out = run_eligibility_gate(articles)
     
