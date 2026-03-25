@@ -110,7 +110,6 @@ print("Industries: ")
 print(json.dumps(industries, indent=2))
 ELIGIBILITY_SCHEMA = build_eligibility_schema(industries)
 
-
 def update_payload_api_key():
     api_key = os.getenv("EVENTREGISTRY_API_KEY")
     ARTICLES_PAYLOAD["apiKey"] = api_key
