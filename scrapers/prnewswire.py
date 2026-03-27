@@ -91,7 +91,7 @@ def get_prnewswire_meta(feed_url: str):
 
         print(f"Finished parsing page {page}")
         page += 1
-        if page == 2:
+        if page == 4:
             break
     return documents
 
