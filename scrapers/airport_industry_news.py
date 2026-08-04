@@ -15,6 +15,7 @@ load_dotenv()
 
 SCRAPING_BEE_API_KEY = os.getenv("SCRAPING_BEE_API_KEY")
 AIRPORT_INDUSTRY_NEWS_URL = os.getenv("AIRPORT_INDUSTRY_NEWS_URL")
+SCRAPER_SOURCE = "airportindustrynews"
 
 def _build_page_url(index_url: str, page: int) -> str:
     if page == 1:
@@ -60,6 +61,7 @@ def get_airport_industry_news_meta(
                 "discovered_at": datetime.now(timezone.utc),
                 "title": title_tag.get_text(" ", strip=True),
                 "url": article_url,
+                "scraper_source": SCRAPER_SOURCE,
                 "source_domain": tldextract.extract(feed_url).domain,
                 "source_name": "Airport Industry News",
                 "document_type": "news"

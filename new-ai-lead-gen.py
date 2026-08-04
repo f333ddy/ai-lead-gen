@@ -29,6 +29,7 @@ from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
 from email.utils import parsedate_to_datetime
 
+import db
 from scrapers.eventregistry import get_eventregistry_documents
 from scrapers.airport_industry_news import get_airport_industry_documents
 from scrapers.chainstoreage import get_chainstoreage_documents
@@ -55,6 +56,24 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 HUBSPOT_INDUSTRIES: List[str] = []
 INDUSTRY_VALUE_TO_LABEL: Dict[str, str] = {}
 FILTERED_RESULTS: List[Dict[str, Any]] = []
+
+# EMAIL ROUTING
+# Defaults to development on purpose: a missing, empty or misspelled APP_ENV
+# must never blast a real sales team. Only the exact string "production"
+# enables real delivery.
+APP_ENV = (os.getenv("APP_ENV") or "development").strip().lower()
+IS_PRODUCTION = APP_ENV == "production"
+# Every message is redirected here while in development.
+DEV_EMAIL_RECIPIENT = (os.getenv("DEV_EMAIL_RECIPIENT") or "federico.aguilar@lavi.com").strip()
+# Who gets the [QA Review] digest in production. Comma-separated.
+QA_EMAIL_RECIPIENTS = [
+    email.strip()
+    for email in (
+        os.getenv("QA_EMAIL_RECIPIENTS")
+        or "federico.aguilar@lavi.com,will.geller@lavi.com,perryk@lavi.com"
+    ).split(",")
+    if email.strip()
+]
 
 def build_hubspot_industries_label_to_value_map():
     url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
@@ -220,35 +239,114 @@ def call_gate(text: str, article_link: Optional[str], title: str) -> Dict[str, A
     return json.loads(message.content)
 
 def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Persist each scraped document, enrich it, and persist the signal.
+
+    By the time a document reaches here it already carries every raw_documents
+    field, so both rows are written from this one loop. Order matters: the raw
+    row is committed *before* call_gate, so an OpenAI outage or a mid-loop
+    crash still leaves the scrape on record for the next run to pick up.
+
+    Returns the AI's `extracted` block as before -- with enriched_document_id
+    stamped on so team bucketing can write document_team_buckets later.
+    """
     results: List[Dict[str, Any]] = []
 
-    for obj in items:
-        content = obj.get("content", "")
-        link = obj.get("url", None)
-        title = obj.get("title", "")
-        print(f"Analyzing {title}...")
+    with db.connection() as conn:
+        already_enriched = db.fetch_enriched_urls(conn, [i.get("url") for i in items])
+        if already_enriched:
+            print(f"Skipping {len(already_enriched)} document(s) enriched on a previous run")
 
-        #text = html_to_text(raw_html)
+        for obj in items:
+            url = (obj.get("url") or "").strip()
+            if url in already_enriched:
+                continue
 
-        content = call_gate(content, link, title)
-        extracted = content.setdefault("extracted", {})
-        eligible = bool(content.get("eligible"))
-        confidence = float(content.get("confidence", 0.0))
+            content = obj.get("content", "")
+            link = obj.get("url", None)
+            title = obj.get("title", "")
+            print(f"Analyzing {title}...")
 
-        if eligible and confidence >= CONFIDENCE_THRESHOLD:
-            results.append(extracted)
-        else:
-            FILTERED_RESULTS.append(extracted)
+            raw_document_id = db.upsert_raw_document(conn, obj)
+
+            gate_response = call_gate(content, link, title)
+            extracted = gate_response.setdefault("extracted", {})
+            eligible = bool(gate_response.get("eligible"))
+            confidence = float(gate_response.get("confidence", 0.0))
+
+            try:
+                extracted["enriched_document_id"] = db.insert_enriched_document(
+                    conn, obj, gate_response, raw_document_id=raw_document_id
+                )
+            except Exception as exc:
+                # A persistence failure shouldn't cost us the digest for the
+                # rest of the run -- log it and keep going.
+                conn.rollback()
+                print(f"Failed to persist enriched document for {url}: {exc}")
+
+            if eligible and confidence >= CONFIDENCE_THRESHOLD:
+                results.append(extracted)
+            else:
+                FILTERED_RESULTS.append(extracted)
+
     return results
 
+def resolve_email_recipients(to_emails: Iterable[str]) -> List[str]:
+    """Final say on who actually receives a message.
+
+    Development redirects everything to DEV_EMAIL_RECIPIENT, so a test run can
+    never reach a real sales team no matter what the caller passed in.
+
+    An empty intended list sends nothing in either mode -- otherwise a dev run
+    would deliver mail that production would have skipped, which defeats the
+    point of testing against it.
+    """
+    intended = sorted({email.strip() for email in to_emails if email and email.strip()})
+    if not intended:
+        return []
+    if IS_PRODUCTION:
+        return intended
+    return [DEV_EMAIL_RECIPIENT] if DEV_EMAIL_RECIPIENT else []
+
+
+def _dev_mode_banner(intended: List[str]) -> str:
+    """Show who the message would have reached in production."""
+    listed = ", ".join(intended) if intended else "(no recipients resolved)"
+    return (
+        '<div style="background:#fff3cd;border:1px solid #ffe08a;padding:10px 12px;'
+        'margin-bottom:14px;font-family:sans-serif;font-size:13px;color:#5c4400;">'
+        "<strong>DEVELOPMENT MODE</strong> &mdash; redirected to you. "
+        f"In production this would have gone to: {listed}"
+        "</div>"
+    )
+
+
 def send_html_email(to_emails: List[str], subject: str, html_body: str, from_email: str = "marketing@lavi.com", hostname: str = "domain.lavi.com") -> None:
+    intended = sorted({email.strip() for email in to_emails if email and email.strip()})
+    recipients = resolve_email_recipients(intended)
+
+    if not recipients:
+        print(f"No recipients resolved for {subject!r} - skipping send.")
+        return
+
+    if not IS_PRODUCTION:
+        subject = f"[DEV] {subject}"
+        html_body = _dev_mode_banner(intended) + html_body
+
     msg = MIMEMultipart("alternative")
     msg["From"] = from_email
-    msg["To"] = ", ".join(to_emails)
+    msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
     with smtplib.SMTP(hostname, 25) as server:
         server.send_message(msg)
+
+    if IS_PRODUCTION:
+        print(f"Sent {subject!r} to {len(recipients)} recipient(s).")
+    else:
+        print(
+            f"[DEV] Sent {subject!r} to {recipients[0]} "
+            f"(production would have sent to {len(intended)}: {', '.join(intended) or 'none'})"
+        )
 
 
 def get_all_teams():
@@ -304,11 +402,11 @@ def test_send_emails_to_teams(team_buckets):
         if not emails:
             print(f"No users found for team {team_id}, skipping email.")
             continue
-        emails.add("perryk@lavi.com")
-        emails.add("will.geller@lavi.com")
-        emails.add("federico.aguilar@lavi.com")
+        # No hardcoded QA additions here -- development redirects everything to
+        # DEV_EMAIL_RECIPIENT inside send_html_email, and production should
+        # reach the real team only.
         print("Emails found: ")
-        print(json.dumps(list(emails), indent=2))
+        print(json.dumps(sorted(emails), indent=2))
 
         # Send email
         team_name = team_id_to_name[team_id]
@@ -328,14 +426,11 @@ def test_send_emails_to_teams(team_buckets):
             html_body=html_body,
         )
 
-        print(f"Email sent to team {team_id} ({len(emails)} recipients).")
+        print(f"Digest for team {team_id} dispatched ({len(emails)} intended recipient(s)).")
 
 def send_filtered_email():
     print("Going to send out filtered email...")
-    emails = set()
-    emails.add("federico.aguilar@lavi.com")
-    emails.add("will.geller@lavi.com")
-    emails.add("perryk@lavi.com")
+    emails = set(QA_EMAIL_RECIPIENTS)
     count = len(FILTERED_RESULTS)
     plural = "Articles" if count != 1 else "Article"
     subject = f"[QA Review] {count} {plural} Filtered by Eligiblity Gate"
@@ -355,19 +450,19 @@ if __name__ == "__main__":
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("Starting scrapers...")
     print("Starting eventregistry")
-    docs_event_registry = get_eventregistry_documents()
+    #docs_event_registry = get_eventregistry_documents()
     print("Starting airport industry")
-    docs_airport_industry = get_airport_industry_documents()
+    #docs_airport_industry = get_airport_industry_documents()
     print("Starting chainstoreage")
-    docs_chainstoreage_docs = get_chainstoreage_documents()
+    #docs_chainstoreage_docs = get_chainstoreage_documents()
     print("Starting NACS")
     docs_nacs = get_nacs_documents()
     print("Starting NAHB")
-    docs_nahb = get_nahb_documents()
+    #docs_nahb = get_nahb_documents()
     print("Starting PR Newswire")
-    docs_prnewswire = get_prnewswire_documents()
-    docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire
-
+    #docs_prnewswire = get_prnewswire_documents()
+    #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire
+    docs = docs_nacs
     #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb
     print("Scrapers done!")
     
@@ -375,5 +470,5 @@ if __name__ == "__main__":
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
     industry_to_teams_map = build_industry_to_teams_map(raw_industry_team_mappings)
     team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
-    test_send_emails_to_teams(team_buckets)
-    send_filtered_email()
+    #test_send_emails_to_teams(team_buckets)
+    #send_filtered_email()

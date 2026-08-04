@@ -1,6 +1,11 @@
 from typing import Dict, List
 
 import date_utils as du
+
+# Identifies the collector, not the publisher. EventRegistry fans out to many
+# sources (retaildive.com, fooddive.com, ...); those land in source_domain.
+SCRAPER_SOURCE = "eventregistry"
+
 def extract_documents(res: Dict) -> List[Dict]:
     return [
         {
@@ -9,6 +14,7 @@ def extract_documents(res: Dict) -> List[Dict]:
             "title": article.get("title"),
             "url": article.get("url"),
             "content": article.get("body"),
+            "scraper_source": SCRAPER_SOURCE,
             "source_name": article.get("source", {}).get("title"),
             "source_domain": article.get("source", {}).get("uri"),
             "document_type": "news"

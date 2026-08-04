@@ -17,6 +17,7 @@ import date_utils as du
 load_dotenv()
 
 FEED_URL = os.getenv("CHAIN_STORE_AGE_FEED_URL")
+SCRAPER_SOURCE = "chainstoreage"
 
 
 def _build_page_url(base_url: str, page: int) -> str:
@@ -159,6 +160,7 @@ def get_chainstoreage_documents() -> List[Dict]:
                 "content": content,
                 "language": language,
                 "language_confidence": confidence,
+                "scraper_source": SCRAPER_SOURCE,
                 "source_domain": tldextract.extract(FEED_URL).domain,
                 "source_name": "Chain Store Age",
                 "document_type": "news",

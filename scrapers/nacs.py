@@ -17,6 +17,7 @@ from utils.scrapingbee import get_scrapingbee_client, get_soup
 load_dotenv()
 
 NACS_TODAY_URL = os.getenv("NACS_TODAY_URL")
+SCRAPER_SOURCE = "nacs"
 
 def get_nacs_meta(
         nacs_today_url: str = NACS_TODAY_URL,
@@ -51,6 +52,7 @@ def get_nacs_meta(
             "discovered_at": du.DATE_NOW,
             "title": title,
             "url": document_url,
+            "scraper_source": SCRAPER_SOURCE,
             "source_domain": tldextract.extract(NACS_TODAY_URL).domain,
             "source_name": "NACS",
             "document_type": "news"

@@ -5,6 +5,43 @@ def get_now_utc() -> datetime:
     return datetime.now(timezone.utc)
 DATE_NOW = get_now_utc()
 
+def to_utc_datetime(value) -> datetime | None:
+    """Coerce a scraper's published_at/discovered_at into a tz-aware UTC datetime.
+
+    The scrapers emit three different types for these fields: real datetime
+    objects (airportindustrynews, chainstoreage, nahb, nacs), an ISO string
+    (prnewswire), and a raw unvalidated API string (eventregistry). The
+    timestamptz columns take one type, so normalize here instead of at every
+    call site. Naive values are assumed UTC. Returns None for anything
+    unparseable so a bad date never blocks the row.
+    """
+    if value is None:
+        return None
+
+    # datetime before date: datetime is a subclass of date.
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime(value.year, value.month, value.day)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            # Reuse the 14-format parser below rather than duplicating it.
+            parsed = parse_chainstoreage_date(text)
+            if parsed is None:
+                return None
+    else:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
 def get_today_midnight_formatted() -> str:
     now = datetime.now(timezone.utc)
     return now.replace(hour=0, minute=0, second=0, microsecond=0)

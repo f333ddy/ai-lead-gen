@@ -14,6 +14,7 @@ from utils.scrapingbee import get_scrapingbee_client, get_soup
 load_dotenv()
 
 SCRAPING_BEE_API_KEY = os.getenv("SCRAPING_BEE_API_KEY")
+SCRAPER_SOURCE = "prnewswire"
 
 def get_prnewswire_content(url):
     client = get_scrapingbee_client()
@@ -79,6 +80,7 @@ def get_prnewswire_meta(feed_url: str):
                 "discovered_at": du.DATE_NOW,
                 "title": title,
                 "url": url,
+                "scraper_source": SCRAPER_SOURCE,
                 "source_domain": tldextract.extract(feed_url).domain,
                 "source_name": "PR Newswire",
                 "document_type": "news",

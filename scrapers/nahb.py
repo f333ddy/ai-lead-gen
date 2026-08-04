@@ -16,6 +16,7 @@ from datetime import date
 load_dotenv()
 
 NAHB_FEED_URL = os.getenv("NAHB_FEED_URL")
+SCRAPER_SOURCE = "nahb"
 
 def _build_page_url(base_url: str, first: int) -> str:
     if first == 0:
@@ -73,6 +74,7 @@ def get_nahb_meta(feed_url: str) -> List[Dict]:
                 "discovered_at": discovered_at,
                 "title": title,
                 "url": document_url,
+                "scraper_source": SCRAPER_SOURCE,
                 "source_domain": tldextract.extract(feed_url).domain,
                 "source_name": "NAHB",
                 "document_type": "news"
