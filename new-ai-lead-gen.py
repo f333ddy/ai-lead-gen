@@ -189,7 +189,8 @@ def bucket_articles_by_team(
 ) -> Dict[str, List[dict]]:
     team_buckets: Dict[str, List[dict]] = defaultdict(list)
     print("articles_receved_for_buckets: ")
-    print(json.dumps(articles, indent=2))
+    # default=str so a non-serializable value can never crash the run here.
+    print(json.dumps(articles, indent=2, default=str))
     for article in articles:
         # Local set for this article only
         team_buckets_to_add_article_to: Set[str] = set()
@@ -274,8 +275,12 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
             confidence = float(gate_response.get("confidence", 0.0))
 
             try:
-                extracted["enriched_document_id"] = db.insert_enriched_document(
-                    conn, obj, gate_response, raw_document_id=raw_document_id
+                # Stored as str, not UUID: this dict is JSON-dumped for debug
+                # output and rendered into the email templates.
+                extracted["enriched_document_id"] = str(
+                    db.insert_enriched_document(
+                        conn, obj, gate_response, raw_document_id=raw_document_id
+                    )
                 )
             except Exception as exc:
                 # A persistence failure shouldn't cost us the digest for the
