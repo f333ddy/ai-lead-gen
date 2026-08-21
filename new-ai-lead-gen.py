@@ -22,8 +22,12 @@ except ImportError:
     BeautifulSoup = None
 from jinja2 import Template
 from email_template import template_str, test_template_str
-from eligibility_schema import build_eligibility_schema
+from eligibility_schema import build_eligibility_schema, build_solicitation_schema
 from prompts import GATE_SYSTEM, GATE_USER_TMPL
+from prompts_solicitation import (
+    SOLICITATION_GATE_SYSTEM,
+    SOLICITATION_GATE_USER_TMPL,
+)
 from event_registry import ARTICLES_PAYLOAD
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
@@ -36,6 +40,7 @@ from scrapers.chainstoreage import get_chainstoreage_documents
 from scrapers.nacs import get_nacs_documents
 from scrapers.nahb import get_nahb_documents
 from scrapers.prnewswire import get_prnewswire_documents
+from scrapers.samgov import get_samgov_documents
 
 # Global Variables
 KEYWORDS = [
@@ -133,6 +138,10 @@ def get_hubspot_industries() -> List[str]:
 
 industries =  get_hubspot_industries()
 ELIGIBILITY_SCHEMA = build_eligibility_schema(industries)
+# Solicitations are judged by a separate prompt/schema pair: the news gate
+# rejects government buyers outright, which would fail nearly every SAM.gov
+# notice. See prompts_solicitation.py for the reasoning.
+SOLICITATION_SCHEMA = build_solicitation_schema(industries)
 
 def get_hubspot_raw_industry_team_mappings():
     url = "https://api.hubapi.com/crm/v3/objects/2-54755382?limit=100&properties=industry,team"
@@ -220,18 +229,39 @@ def html_to_text(html: str) -> str:
     text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
     return text
 
-def call_gate(text: str, article_link: Optional[str], title: str) -> Dict[str, Any]:
-    """Call the Responses API with a JSON Schema (Structured Outputs)."""
-    prompt = GATE_USER_TMPL.format(text=text, article_link=article_link or "", title=title, industries=industries)
+def call_gate(
+    text: str,
+    article_link: Optional[str],
+    title: str,
+    document_type: str = "news",
+) -> Dict[str, Any]:
+    """Call the Responses API with a JSON Schema (Structured Outputs).
+
+    `document_type` selects the prompt/schema pair. It defaults to "news" so
+    the six existing scrapers keep their exact behavior; only documents a
+    scraper explicitly marks "solicitation" take the SAM.gov path.
+    """
+    if document_type == "solicitation":
+        system_prompt = SOLICITATION_GATE_SYSTEM
+        user_template = SOLICITATION_GATE_USER_TMPL
+        schema = SOLICITATION_SCHEMA
+    else:
+        system_prompt = GATE_SYSTEM
+        user_template = GATE_USER_TMPL
+        schema = ELIGIBILITY_SCHEMA
+
+    prompt = user_template.format(
+        text=text, article_link=article_link or "", title=title, industries=industries
+    )
     rsp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": GATE_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
         response_format={
             "type": "json_schema",
-            "json_schema": ELIGIBILITY_SCHEMA
+            "json_schema": schema
         }
     )
     message = rsp.choices[0].message
@@ -253,7 +283,10 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
     results: List[Dict[str, Any]] = []
 
     with db.connection() as conn:
-        already_enriched = db.fetch_enriched_urls(conn, [i.get("url") for i in items])
+        # Not fetch_enriched_urls: solicitations get amended in place, so a
+        # url-only skip would silently drop the amendment that finally states
+        # the scope. News documents still skip on url alone.
+        already_enriched = db.fetch_already_enriched(conn, items)
         if already_enriched:
             print(f"Skipping {len(already_enriched)} document(s) enriched on a previous run")
 
@@ -269,7 +302,9 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
 
             raw_document_id = db.upsert_raw_document(conn, obj)
 
-            gate_response = call_gate(content, link, title)
+            gate_response = call_gate(
+                content, link, title, document_type=obj.get("document_type") or "news"
+            )
             extracted = gate_response.setdefault("extracted", {})
             eligible = bool(gate_response.get("eligible"))
             confidence = float(gate_response.get("confidence", 0.0))
@@ -466,8 +501,21 @@ if __name__ == "__main__":
     #docs_nahb = get_nahb_documents()
     print("Starting PR Newswire")
     #docs_prnewswire = get_prnewswire_documents()
+    print("Starting SAM.gov")
+    # days_back=1 is required, not a preference: the bulk extract is cut
+    # nightly around 03:30 UTC and contains data through the *previous* day,
+    # so days_back=0 legitimately returns zero rows.
+    #
+    # Isolated so a SAM.gov failure cannot cost us the news digest. The
+    # scraper raises rather than returning a partial date range, and that
+    # deserves a loud log line, not a dead pipeline.
+    try:
+        docs_samgov = get_samgov_documents(days_back=1)
+    except Exception as exc:
+        print(f"SAM.gov scrape FAILED, continuing without it: {exc}")
+        docs_samgov = []
     #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire
-    docs = docs_nacs
+    docs = docs_nacs + docs_samgov
     #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb
     print("Scrapers done!")
     

@@ -311,6 +311,66 @@ def attach_raw_document_ids(
     return attached
 
 
+def fetch_already_enriched(
+    conn: psycopg.Connection,
+    documents: Iterable[Dict[str, Any]],
+) -> Set[str]:
+    """Return urls to skip, treating amendable documents differently.
+
+    News articles are immutable: once enriched, re-enriching is pure waste, so
+    seeing the url is reason enough to skip. Solicitations are not. SAM amends
+    a notice in place -- same url, `PostedDate` re-stamped, and the amendment
+    text prepended to the description. Skipping on url alone means an amendment
+    that finally states the scope is never evaluated, which loses exactly the
+    leads that improve.
+
+    So for documents carrying `document_type = 'solicitation'`, a url is only
+    skipped when what we already enriched is at least as new as what we now
+    hold. Every other document type keeps the original url-only behavior.
+
+    `doc_date` is a text column holding an ISO date, so a lexicographic
+    comparison orders it correctly; it is written from published_at by
+    insert_enriched_document.
+    """
+    amendable: Dict[str, str] = {}
+    immutable: Set[str] = set()
+
+    for document in documents:
+        url = (document.get("url") or "").strip()
+        if not url:
+            continue
+        if (document.get("document_type") or "") != "solicitation":
+            immutable.add(url)
+            continue
+        published_at = du.to_utc_datetime(document.get("published_at"))
+        incoming = published_at.date().isoformat() if published_at else ""
+        # Keep the newest date if the same url appears twice in one batch.
+        if incoming > amendable.get(url, ""):
+            amendable[url] = incoming
+
+    skip: Set[str] = set()
+
+    if immutable:
+        skip |= fetch_enriched_urls(conn, immutable)
+
+    if amendable:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT url, COALESCE(doc_date, '') FROM enriched_documents
+                WHERE url = ANY(%s)
+                """,
+                (sorted(amendable),),
+            )
+            for url, stored_date in cur.fetchall():
+                # No stored date means we cannot prove it is stale -- skip, so
+                # a missing date can never cause endless re-enrichment.
+                if not amendable[url] or stored_date >= amendable[url]:
+                    skip.add(url)
+
+    return skip
+
+
 def fetch_enriched_urls(conn: psycopg.Connection, urls: Iterable[str]) -> Set[str]:
     """Return the subset of `urls` that already have an enriched_documents row.
 
