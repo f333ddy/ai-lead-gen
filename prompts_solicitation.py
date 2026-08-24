@@ -75,7 +75,7 @@ SOLICITATION_GATE_SYSTEM = (
     "=== And still infer when the notice is thin ===\n"
     "Many notices carry only a sentence or two, with the real scope in an "
     "unattached document. When the description is sparse, infer from the facility "
-    "and the buying organization: a visitor center, museum, courthouse, clinic "
+    "and the buying agency: a visitor center, museum, courthouse, clinic "
     "waiting room, airport terminal, base entry point, school, or ID/badging office "
     "all imply managed public foot traffic. A renovation of such a space is a "
     "plausible fit even when no product is named.\n\n"
@@ -121,10 +121,38 @@ SOLICITATION_GATE_SYSTEM = (
     "'Chiller replacement at the visitor center' is a chiller job.\n\n"
 
     "=== Entity and routing ===\n"
-    "The buyer is a government agency. That is expected and correct -- set "
-    "`company` to the buying organization (prefer the specific office or "
-    "installation over the parent department when both are given). Never leave "
-    "`company` empty because the buyer is governmental.\n\n"
+    "The buyer is a government agency. That is expected and correct -- never "
+    "leave `company` empty because the buyer is governmental.\n\n"
+    "`company` must name the END USER: the installation, medical center, park "
+    "unit, base, embassy, courthouse or command that will actually receive the "
+    "work. That is the account a salesperson would call. It is usually stated in "
+    "the SCOPE OF WORK text rather than in the header lines -- when the scope "
+    "reads 'The Long Beach Veterans Affairs Healthcare System (LBVAHCS) is "
+    "seeking to purchase...', `company` is 'Long Beach Veterans Affairs "
+    "Healthcare System'.\n\n"
+    "Do NOT take `company` from the CONTRACTING OFFICE line. That line is "
+    "procurement routing: values like '262-NETWORK CONTRACT OFFICE 22 (36C262)', "
+    "'NAVSUP WEAPON SYSTEMS SUPPORT', 'DLA LAND AND MARITIME', 'W6QM MICC-FT "
+    "DRUM' or 'IBC ACQ SVCS DIRECTORATE' name the shop processing the paperwork, "
+    "not the customer, and are worthless as a lead. Never write a contracting "
+    "code such as '36C262' into `company`.\n\n"
+    "Resolve `company` in this order:\n"
+    "  1. The end-user organization or facility named in the SCOPE OF WORK.\n"
+    "  2. Failing that, the facility implied by the TITLE together with PLACE OF "
+    "PERFORMANCE -- a title reading 'Outdoor Playground - Misawa Air Base, Japan' "
+    "gives 'Misawa Air Base'.\n"
+    "  3. Only when neither is inferable, the BUYING AGENCY line, written "
+    "naturally: 'Department of Veterans Affairs', never 'VETERANS AFFAIRS, "
+    "DEPARTMENT OF'.\n"
+    "The CONTRACTING OFFICE line may be used only when it plainly names a real "
+    "installation instead of an acquisition shop -- 'U.S. EMBASSY AMMAN' is a "
+    "usable end user, while anything containing CONTRACT, CONTRACTING, "
+    "ACQUISITION, ACQ or PROCUREMENT, or consisting of a bare office code, is "
+    "not.\n\n"
+    "Write `company` in natural title case, spelled out rather than "
+    "abbreviated, with routing codes and parenthetical office numbers stripped. "
+    "Expand an acronym when the notice gives it (write 'Long Beach Veterans "
+    "Affairs Healthcare System', not 'LBVAHCS').\n\n"
     "For `industries`, use ONLY values from the provided INDUSTRIES list, and tag "
     "BOTH of these when possible:\n"
     "  (a) the account type -- the appropriate Government-* value; and\n"
@@ -180,7 +208,7 @@ Reminders:
   one for being software, SaaS, a subscription, or IT-coded -- judge what the
   system does. Competitor names (Qmatic, Q-Flow, ACF Technologies, Vecna,
   NEMO-Q) indicate our market.
-- When the scope text is thin, infer from the facility and buying organization
+- When the scope text is thin, infer from the facility and buying agency
   rather than defaulting to ineligible.
 - Read OPPORTUNITY STAGE and calibrate: early-stage notices are meant to be
   vague, and a sole-source window is worth leaning toward.
@@ -200,8 +228,12 @@ Additional rules:
 - Be conservative on scope, not on stage. If the work is genuinely outside our
   domain, say so; but do not reject a plausible fit just because the notice is
   short or early.
-- Set `company` to the buying organization, preferring the specific office or
-  installation over the parent department.
+- Set `company` to the END USER that receives the work -- the facility, medical
+  center, base, park unit or embassy named in the SCOPE OF WORK (for example
+  "Long Beach Veterans Affairs Healthcare System"). Never use the CONTRACTING
+  OFFICE line or a routing code like "36C262". If no end user is stated, infer
+  it from the TITLE plus PLACE OF PERFORMANCE; only if that also fails, use the
+  BUYING AGENCY. Title case, acronyms expanded, codes stripped.
 - For `industries`, tag the Government-* account type AND the venue/facility
   type when the scope implies one. A Government-* value alone is acceptable when
   no venue is genuinely inferable.

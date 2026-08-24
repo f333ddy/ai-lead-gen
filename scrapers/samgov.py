@@ -455,8 +455,13 @@ def _build_content(row: Dict[str, str], stage: str) -> str:
     A SAM row has no natural article body, so `content` is synthesized rather
     than copied from one column. The header lines exist because the
     Description alone is often too thin to judge: decoded NAICS/PSC plus the
-    buying organization (National Park Service implies visitor centers, VA
-    implies clinic waiting rooms) frequently carry the fit signal on their own.
+    buying agency (National Park Service implies visitor centers, VA implies
+    clinic waiting rooms) frequently carry the fit signal on their own.
+
+    The agency and the contracting office are emitted as two separate labelled
+    lines, never one path. They answer different questions -- the agency is a
+    fit signal, the office is procurement routing -- and merging them is what
+    put a contract-office code in `company`.
 
     Contact details are deliberately absent -- they are lead-delivery data and
     never change the eligibility verdict, so including them would be pure
@@ -484,15 +489,33 @@ def _build_content(row: Dict[str, str], stage: str) -> str:
             f"WORK CATEGORY (PSC {psc_code}): {psc_label or 'unrecognized code'}"
         )
 
-    org = " > ".join(
-        part for part in (
-            (row.get("Department/Ind.Agency") or "").strip(),
-            (row.get("Sub-Tier") or "").strip(),
-            (row.get("Office") or "").strip(),
-        ) if part
-    )
-    if org:
-        lines.append(f"BUYING ORGANIZATION: {org}")
+    # Department and Sub-Tier are byte-identical on ~19% of rows -- VA and State
+    # both repeat the department into the sub-tier -- so dedupe before joining
+    # rather than emitting "VETERANS AFFAIRS, DEPARTMENT OF > VETERANS AFFAIRS,
+    # DEPARTMENT OF", which is pure token cost and reads as more hierarchy than
+    # the row actually carries.
+    agency_parts: List[str] = []
+    for part in (
+        (row.get("Department/Ind.Agency") or "").strip(),
+        (row.get("Sub-Tier") or "").strip(),
+    ):
+        if part and part not in agency_parts:
+            agency_parts.append(part)
+    agency = " > ".join(agency_parts)
+    if agency:
+        lines.append(f"BUYING AGENCY: {agency}")
+
+    # Split from the agency deliberately. `Office` is the contracting shop that
+    # runs the procurement -- measured over 3,000 rows the common values are
+    # "DLA LAND AND MARITIME", "NAVSUP WEAPON SYSTEMS SUPPORT", "262-NETWORK
+    # CONTRACT OFFICE 22 (36C262)", "W6QM MICC-FT DRUM" -- and only sometimes
+    # the end user ("U.S. EMBASSY AMMAN", "PWR GOGA(86000)"). Folding it into a
+    # single BUYING ORGANIZATION line taught the gate to read the leaf as the
+    # customer and write a routing code into `company`. Labelling it for what it
+    # is gives the prompt something to tell the two apart by.
+    office = (row.get("Office") or "").strip()
+    if office:
+        lines.append(f"CONTRACTING OFFICE (procurement routing, not the customer): {office}")
 
     lines.append(f"PLACE OF PERFORMANCE: {_place_of_performance(row)}")
     lines.append(
