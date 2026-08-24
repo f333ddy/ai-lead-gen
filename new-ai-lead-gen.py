@@ -281,6 +281,7 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
     stamped on so team bucketing can write document_team_buckets later.
     """
     results: List[Dict[str, Any]] = []
+    gate_failures: List[str] = []
 
     with db.connection() as conn:
         # Not fetch_enriched_urls: solicitations get amended in place, so a
@@ -302,9 +303,24 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
 
             raw_document_id = db.upsert_raw_document(conn, obj)
 
-            gate_response = call_gate(
-                content, link, title, document_type=obj.get("document_type") or "news"
-            )
+            try:
+                gate_response = call_gate(
+                    content, link, title, document_type=obj.get("document_type") or "news"
+                )
+            except Exception as exc:
+                # One bad document must not cost us the rest of the run. A
+                # single SAM.gov day is ~284 gate calls, so a transient rate
+                # limit or timeout is a matter of when, not if -- and an
+                # unhandled one here would silently truncate the digest at
+                # whatever document it happened to hit.
+                #
+                # Safe to skip: the raw row is already committed above and no
+                # enriched row is written, so fetch_already_enriched will not
+                # skip this document and the next run picks it up.
+                gate_failures.append(title or url)
+                print(f"Gate call FAILED for {url}: {exc}")
+                continue
+
             extracted = gate_response.setdefault("extracted", {})
             eligible = bool(gate_response.get("eligible"))
             confidence = float(gate_response.get("confidence", 0.0))
@@ -327,6 +343,18 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
                 results.append(extracted)
             else:
                 FILTERED_RESULTS.append(extracted)
+
+    if gate_failures:
+        # Surfaced rather than swallowed: a short digest with no explanation is
+        # indistinguishable from a quiet day. These retry on the next run.
+        print(
+            f"Gate failed on {len(gate_failures)} document(s) -- they were skipped "
+            "and will be retried next run:"
+        )
+        for name in gate_failures[:10]:
+            print(f"  - {name}")
+        if len(gate_failures) > 10:
+            print(f"  ... and {len(gate_failures) - 10} more")
 
     return results
 
@@ -496,7 +524,7 @@ if __name__ == "__main__":
     print("Starting chainstoreage")
     #docs_chainstoreage_docs = get_chainstoreage_documents()
     print("Starting NACS")
-    docs_nacs = get_nacs_documents()
+    #docs_nacs = get_nacs_documents()
     print("Starting NAHB")
     #docs_nahb = get_nahb_documents()
     print("Starting PR Newswire")
@@ -515,7 +543,7 @@ if __name__ == "__main__":
         print(f"SAM.gov scrape FAILED, continuing without it: {exc}")
         docs_samgov = []
     #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire
-    docs = docs_nacs + docs_samgov
+    docs = docs_samgov
     #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb
     print("Scrapers done!")
     

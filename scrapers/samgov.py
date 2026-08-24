@@ -79,7 +79,7 @@ class SamGovTruncatedError(RuntimeError):
 # Ordering is reliable at day granularity but not strictly monotonic row to row,
 # so one stale row is not proof we have passed the cutoff. Keep reading until
 # this many consecutive stale rows confirm it (~a few hundred KB of insurance).
-STALE_ROW_TOLERANCE = 750
+STALE_ROW_TOLERANCE = 20
 
 # Notice types that represent work we can still influence or win. Early-stage
 # notices are kept deliberately: responding to a Sources Sought shapes the
@@ -634,6 +634,7 @@ def get_samgov_documents(
     stale_streak = 0
     dropped_type = 0
     dropped_relevance = 0
+    dropped_stale = 0
     truncated = False
     bytes_read = 0
 
@@ -641,6 +642,10 @@ def get_samgov_documents(
 
     for row, counter in _iter_rows(csv_path, budget):
         seen_rows += 1
+
+        if seen_rows == counter:
+            print("On last seen row")
+
         if counter is not None:
             bytes_read = counter
             if counter >= budget:
@@ -664,6 +669,7 @@ def get_samgov_documents(
                 )
 
         if posted < cutoff:
+            dropped_stale += 1
             stale_streak += 1
             # The file is sorted newest-first, so a sustained run of older rows
             # means everything after this point is older too.
@@ -775,11 +781,17 @@ def get_samgov_documents(
         )
 
     read_note = f", {bytes_read / (1024 * 1024):.1f} MB read" if bytes_read else ""
+    # Every scanned row is accounted for, so the counts reconcile against
+    # `rows scanned` and a silent loss shows up as a gap rather than hiding.
     print(
         f"SAM.gov: {len(documents)} document(s) posted/amended on or after {cutoff} "
-        f"({seen_rows} rows scanned{read_note}; dropped {dropped_type} already-decided/"
-        f"unrelated, {dropped_closed} past deadline, "
-        f"{dropped_relevance} by NAICS/PSC relevance)"
+        f"({seen_rows} rows scanned{read_note})"
+    )
+    print(
+        f"SAM.gov: of {seen_rows} rows -- {dropped_stale} older than cutoff, "
+        f"{dropped_type} already-decided/unrelated, {dropped_closed} past deadline, "
+        f"{dropped_relevance} failed NAICS/PSC relevance, "
+        f"{len(documents)} kept as documents"
     )
     if stage_counts:
         breakdown = ", ".join(
