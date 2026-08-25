@@ -518,17 +518,17 @@ if __name__ == "__main__":
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("Starting scrapers...")
     print("Starting eventregistry")
-    #docs_event_registry = get_eventregistry_documents()
+    docs_event_registry = get_eventregistry_documents()
     print("Starting airport industry")
-    #docs_airport_industry = get_airport_industry_documents()
+    docs_airport_industry = get_airport_industry_documents()
     print("Starting chainstoreage")
-    #docs_chainstoreage_docs = get_chainstoreage_documents()
+    docs_chainstoreage_docs = get_chainstoreage_documents()
     print("Starting NACS")
-    #docs_nacs = get_nacs_documents()
+    docs_nacs = get_nacs_documents()
     print("Starting NAHB")
-    #docs_nahb = get_nahb_documents()
+    docs_nahb = get_nahb_documents()
     print("Starting PR Newswire")
-    #docs_prnewswire = get_prnewswire_documents()
+    docs_prnewswire = get_prnewswire_documents()
     print("Starting SAM.gov")
     # days_back=1 is required, not a preference: the bulk extract is cut
     # nightly around 03:30 UTC and contains data through the *previous* day,
@@ -542,14 +542,12 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"SAM.gov scrape FAILED, continuing without it: {exc}")
         docs_samgov = []
-    #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire
-    docs = docs_samgov
-    #docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb
+    docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire + docs_samgov
     print("Scrapers done!")
     
     out = test_run_eligibility_gate(docs)
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
     industry_to_teams_map = build_industry_to_teams_map(raw_industry_team_mappings)
     team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
-    #test_send_emails_to_teams(team_buckets)
-    #send_filtered_email()
+    test_send_emails_to_teams(team_buckets)
+    send_filtered_email()
