@@ -133,7 +133,13 @@ def get_chainstoreage_documents() -> List[Dict]:
             if document_url in seen_urls:
                 continue
 
-            document_soup = get_soup(client, document_url, render_js=True, wait=6000)
+            # premium_proxy is required here, not an optimization: chainstoreage.com
+            # returns 500 to datacenter proxies on article pages, so without it every
+            # article fetch fails and the scraper yields nothing -- even on days the
+            # index above (which already passes premium_proxy) finds cards.
+            document_soup = get_soup(
+                client, document_url, render_js=True, wait=6000, premium_proxy=True
+            )
 
             date_text = _extract_date_published(document_soup)
             if not date_text:
