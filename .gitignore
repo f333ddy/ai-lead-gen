@@ -32,3 +32,6 @@ htmlcov/
 
 # Cron
 cron.log
+
+# Per-run logs from runlog.py (rotated, keeps the last 30)
+logs/

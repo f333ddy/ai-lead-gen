@@ -8,6 +8,16 @@ from email.mime.text import MIMEText
 from typing import List, Dict, Any, Optional, Set, Iterable
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+
+# Ahead of every third-party and project import on purpose. Task Scheduler
+# gives us no console, so this is what makes stdout UTF-8 (cp1252 otherwise,
+# and one accented headline aborts the run) and what tees the run to logs/.
+# It also installs the excepthook, and a ModuleNotFoundError from the imports
+# below is raised at import time where no try//except in main can catch it --
+# only the excepthook turns a drifted venv into an alert instead of silence.
+import runlog
+runlog.start()
+
 from dotenv import load_dotenv
 load_dotenv()
 # pip install openai beautifulsoup4
