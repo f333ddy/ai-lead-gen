@@ -144,7 +144,12 @@ def get_nacs_documents(days_back: int = 0) -> List[Dict]:
 
     enriched: List[Dict] = []
     for doc in documents:
-        article = get_nacs_content(doc["url"])
+        try:
+            article = get_nacs_content(doc["url"])
+        except Exception as exc:
+            # One bad article page must not cost us the rest of the digest.
+            print(f"NACS: failed to fetch {doc['url']}: {exc}")
+            continue
         content = article["content"]
         if not content:
             print(f"NACS: no content extracted, skipping {doc['url']}")

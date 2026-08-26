@@ -93,11 +93,18 @@ def get_nahb_content(url: str) -> Dict:
 
 def get_nahb_documents() -> List[Dict]:
     documents = get_nahb_meta(NAHB_FEED_URL)
+    enriched: List[Dict] = []
 
     for doc in documents:
-        content = get_nahb_content(doc["url"])
+        try:
+            content = get_nahb_content(doc["url"])
+        except Exception as exc:
+            # One bad article page must not cost us the rest of the digest.
+            print(f"NAHB: failed to fetch {doc['url']}: {exc}")
+            continue
         language, confidence = langid.classify(content)
         doc["content"] = content
         doc["language"] = language
         doc["language_confidence"] = confidence
-    return documents
+        enriched.append(doc)
+    return enriched

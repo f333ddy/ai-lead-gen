@@ -91,11 +91,18 @@ def get_airport_industry_documents(
     feed_url: str = AIRPORT_INDUSTRY_NEWS_URL
 ) -> List[Dict]:
     documents = get_airport_industry_news_meta(feed_url)
+    enriched: List[Dict] = []
 
     for document in documents:
-        content = get_airport_industry_news_content(document["url"])
+        try:
+            content = get_airport_industry_news_content(document["url"])
+        except Exception as exc:
+            # One bad article page must not cost us the rest of the digest.
+            print(f"Airport Industry News: failed to fetch {document['url']}: {exc}")
+            continue
         language, confidence = langid.classify(content) if content else ("unknown", 0.0)
         document["content"] = content
         document["language"] = language
         document["language_confidence"] = confidence
-    return documents
+        enriched.append(document)
+    return enriched

@@ -137,9 +137,16 @@ def get_chainstoreage_documents() -> List[Dict]:
             # returns 500 to datacenter proxies on article pages, so without it every
             # article fetch fails and the scraper yields nothing -- even on days the
             # index above (which already passes premium_proxy) finds cards.
-            document_soup = get_soup(
-                client, document_url, render_js=True, wait=6000, premium_proxy=True
-            )
+            try:
+                document_soup = get_soup(
+                    client, document_url, render_js=True, wait=6000, premium_proxy=True
+                )
+            except Exception as exc:
+                # A single flaky article (a stray 500, a bad proxy hop) must not
+                # cost us the rest of the day's cards. Skip it and keep paginating
+                # -- we don't know its date, so this isn't grounds to stop early.
+                print(f"ChainStoreAge: failed to fetch {document_url}: {exc}")
+                continue
 
             date_text = _extract_date_published(document_soup)
             if not date_text:

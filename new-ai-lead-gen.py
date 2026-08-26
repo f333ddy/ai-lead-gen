@@ -527,18 +527,53 @@ def send_filtered_email():
 if __name__ == "__main__":
     INDUSTRY_VALUE_TO_LABEL = build_hubspot_industries_label_to_value_map()
     print("Starting scrapers...")
+
+    # Each scraper is isolated the way SAM.gov always was: a single scraper
+    # dying (site redesign, a run of 500s, a parsing error) must not cost us
+    # every other scraper queued behind it in this list, let alone the whole
+    # morning's digest.
     print("Starting eventregistry")
-    docs_event_registry = get_eventregistry_documents()
+    try:
+        docs_event_registry = get_eventregistry_documents()
+    except Exception as exc:
+        print(f"Event Registry scrape FAILED, continuing without it: {exc}")
+        docs_event_registry = []
+
     print("Starting airport industry")
-    docs_airport_industry = get_airport_industry_documents()
+    try:
+        docs_airport_industry = get_airport_industry_documents()
+    except Exception as exc:
+        print(f"Airport Industry News scrape FAILED, continuing without it: {exc}")
+        docs_airport_industry = []
+
     print("Starting chainstoreage")
-    docs_chainstoreage_docs = get_chainstoreage_documents()
+    try:
+        docs_chainstoreage_docs = get_chainstoreage_documents()
+    except Exception as exc:
+        print(f"Chain Store Age scrape FAILED, continuing without it: {exc}")
+        docs_chainstoreage_docs = []
+
     print("Starting NACS")
-    docs_nacs = get_nacs_documents()
+    try:
+        docs_nacs = get_nacs_documents()
+    except Exception as exc:
+        print(f"NACS scrape FAILED, continuing without it: {exc}")
+        docs_nacs = []
+
     print("Starting NAHB")
-    docs_nahb = get_nahb_documents()
+    try:
+        docs_nahb = get_nahb_documents()
+    except Exception as exc:
+        print(f"NAHB scrape FAILED, continuing without it: {exc}")
+        docs_nahb = []
+
     print("Starting PR Newswire")
-    docs_prnewswire = get_prnewswire_documents()
+    try:
+        docs_prnewswire = get_prnewswire_documents()
+    except Exception as exc:
+        print(f"PR Newswire scrape FAILED, continuing without it: {exc}")
+        docs_prnewswire = []
+
     print("Starting SAM.gov")
     # days_back=1 is required, not a preference: the bulk extract is cut
     # nightly around 03:30 UTC and contains data through the *previous* day,

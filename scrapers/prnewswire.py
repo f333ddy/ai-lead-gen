@@ -104,7 +104,12 @@ def get_prnewswire_documents():
     filtered_documents = []
 
     for document in documents:
-        content = get_prnewswire_content(document["url"])
+        try:
+            content = get_prnewswire_content(document["url"])
+        except Exception as exc:
+            # One bad article page must not cost us the rest of the digest.
+            print(f"PR Newswire: failed to fetch {document['url']}: {exc}")
+            continue
         if not content:
             continue
 
