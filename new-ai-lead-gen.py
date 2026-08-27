@@ -89,6 +89,17 @@ QA_EMAIL_RECIPIENTS = [
     ).split(",")
     if email.strip()
 ]
+# Copied on every outbound message, whoever the To line resolved to. Will and
+# Perry need to see what the pipeline actually sent the sales teams without
+# having to be members of every team it sends to.
+ALWAYS_CC_EMAILS = [
+    email.strip()
+    for email in (
+        os.getenv("ALWAYS_CC_EMAILS")
+        or "will.geller@lavi.com,perryk@lavi.com"
+    ).split(",")
+    if email.strip()
+]
 
 def build_hubspot_industries_label_to_value_map():
     url = "https://api.hubapi.com/crm/v3/properties/2-54755382/industry"
@@ -386,14 +397,34 @@ def resolve_email_recipients(to_emails: Iterable[str]) -> List[str]:
     return [DEV_EMAIL_RECIPIENT] if DEV_EMAIL_RECIPIENT else []
 
 
+def resolve_cc_recipients(recipients: Iterable[str]) -> List[str]:
+    """Who gets copied on a message, minus anyone already on the To line.
+
+    Development returns nothing on purpose: send_html_email has already
+    collapsed the To line down to DEV_EMAIL_RECIPIENT, and copying the real
+    people on a test run is the exact thing that redirect exists to prevent.
+    The dev banner reports the copy list instead.
+    """
+    if not IS_PRODUCTION:
+        return []
+    already_addressed = {email.strip().lower() for email in recipients}
+    return [
+        email
+        for email in ALWAYS_CC_EMAILS
+        if email.lower() not in already_addressed
+    ]
+
+
 def _dev_mode_banner(intended: List[str]) -> str:
     """Show who the message would have reached in production."""
     listed = ", ".join(intended) if intended else "(no recipients resolved)"
+    copied = ", ".join(ALWAYS_CC_EMAILS) if ALWAYS_CC_EMAILS else "(nobody)"
     return (
         '<div style="background:#fff3cd;border:1px solid #ffe08a;padding:10px 12px;'
         'margin-bottom:14px;font-family:sans-serif;font-size:13px;color:#5c4400;">'
         "<strong>DEVELOPMENT MODE</strong> &mdash; redirected to you. "
         f"In production this would have gone to: {listed}"
+        f"<br>...copying: {copied}"
         "</div>"
     )
 
@@ -410,20 +441,29 @@ def send_html_email(to_emails: List[str], subject: str, html_body: str, from_ema
         subject = f"[DEV] {subject}"
         html_body = _dev_mode_banner(intended) + html_body
 
+    cc = resolve_cc_recipients(recipients)
+
     msg = MIMEMultipart("alternative")
     msg["From"] = from_email
     msg["To"] = ", ".join(recipients)
+    if cc:
+        # A real Cc header, not a second To: the team should see that Will and
+        # Perry are on the thread. send_message builds the envelope from the
+        # To and Cc headers, so this is also what actually delivers to them.
+        msg["Cc"] = ", ".join(cc)
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
     with smtplib.SMTP(hostname, 25) as server:
         server.send_message(msg)
 
     if IS_PRODUCTION:
-        print(f"Sent {subject!r} to {len(recipients)} recipient(s).")
+        copied = f", cc {', '.join(cc)}" if cc else " (nobody to cc)"
+        print(f"Sent {subject!r} to {len(recipients)} recipient(s){copied}.")
     else:
         print(
             f"[DEV] Sent {subject!r} to {recipients[0]} "
-            f"(production would have sent to {len(intended)}: {', '.join(intended) or 'none'})"
+            f"(production would have sent to {len(intended)}: {', '.join(intended) or 'none'}"
+            f"; cc {', '.join(ALWAYS_CC_EMAILS) or 'none'})"
         )
 
 
