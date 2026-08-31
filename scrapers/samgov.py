@@ -151,11 +151,12 @@ _STAGE_GUIDANCE = {
     ),
 }
 
-# Coarse stage-1 relevance gate. This is NOT a fit test -- it removes the DoD
-# parts/electronics bulk that dominates the file (aircraft components,
-# connectors, fasteners) and leaves roughly 18% of rows for the AI gate to
-# judge. Heavy civil work (roads, dams, sewers) still survives this and is
-# expected to be rejected downstream.
+# Fallback only: consulted when the agency left ClassificationCode blank, which
+# on the CSV extract is close to never (0 of 14,137 open solicitations sampled
+# over 18 days). NAICS describes the seller's industry, not the purchase, so on
+# its own it admits a plumbing contractor's chiller replacement as readily as a
+# lobby renovation -- see _is_relevant. Kept because a blank PSC would otherwise
+# leave a notice with no code signal at all.
 RELEVANT_NAICS = frozenset({
     "236220",  # Commercial and Institutional Building Construction
     "237990",  # Other Heavy and Civil Engineering Construction
@@ -174,9 +175,18 @@ RELEVANT_NAICS = frozenset({
     "561621",  # Security Systems Services (except Locksmiths)
 })
 
-# PSC is hierarchical, so prefixes do the work. Y1/Z1/Z2 are construction and
-# real-property alteration; 56 is fencing/barriers; 71 is furniture and
-# shelving; 99 is signs and displays; 63 is alarm and security systems.
+# The primary code gate. PSC is hierarchical, so prefixes do the work: Y1/Z1/Z2
+# are construction and real-property alteration; 56 is fencing/barriers; 71 is
+# furniture and shelving; 99 is signs and displays; 63 is alarm and security
+# systems. This is NOT a fit test -- it removes the DoD parts/electronics bulk
+# that dominates the file and leaves roughly 15% of open solicitations for the
+# AI gate to judge. Heavy civil work (roads, dams, sewers) still survives and is
+# expected to be rejected downstream.
+#
+# Prefix matching is blunt: these 7 prefixes admit 365 codes, and of the 30 from
+# 56/71/99/63 only 5 are the ones we wanted (9905 signs, 6350 security, 5660
+# fencing, 7110/7125/7195 furniture). Narrowing is pending leadership review --
+# see docs/samgov-code-whitelist.md.
 RELEVANT_PSC_PREFIXES = ("Y1", "Z1", "Z2", "56", "71", "99", "63")
 
 # Electronic and virtual queuing (Qtrac, kiosks, check-in displays, appointment
@@ -224,21 +234,14 @@ _PRODUCT_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 
-# Domain guards for the overloaded words above. Derived from the audit, not
-# guessed: PSC 20 alone accounted for 32 ship-deck "stanchion" notices.
-_WRONG_DOMAIN_TEXT = re.compile(
-    r"\b(?:shipboard|ship'?s|deck|marine|boat|hull|vessel|submarine|galley|"
-    r"topside|bulkhead)\b"
-    r"|\b(?:tank|armored|humvee|truck|trailer|aircraft|helicopter|airframe|"
-    r"fuselage|locomotive|railcar)\b"
-    r"|\b(?:hot\s?dog|cafeteria|steam\s?table|salad\s+bar|food\s+service|"
-    r"serving\s+line)\b",
-    re.IGNORECASE,
-)
-# Ship/marine (20), aerospace (15,16), vehicular (23,24,25), food prep (73).
-_WRONG_DOMAIN_PSC = ("20", "15", "16", "23", "24", "25", "73")
-# Transportation equipment manufacturing -- ships, boats, aircraft, vehicles.
-_WRONG_DOMAIN_NAICS = ("336",)
+# Our product vocabulary is overloaded in federal procurement -- "stanchion"
+# usually means a ship's deck railing post, "handrail" a grab rail on an
+# armored vehicle. This used to be filtered by shipboard/vehicle/galley domain
+# guards, removed 2026-08-28: measured against 18 days of the live extract they
+# rejected 11 notices in total, roughly 0.6 a day, all of them obvious junk
+# ("20--PLATE,STANCHION", "Lower Lobe MX Stand for KC-46"). Not worth the
+# machinery -- the AI gate rejects them just as well. See git history if a
+# broader _PRODUCT_SIGNAL ever makes the volume worth guarding again.
 
 # Column order is positional in the extract; index by name so a future column
 # insertion cannot silently shift every field.
@@ -353,38 +356,42 @@ def _decode_psc(code: str) -> Optional[str]:
 def _is_relevant(row: Dict[str, str]) -> bool:
     """Stage-1 gate: does this notice deserve an AI call?
 
-    Three paths. The code allowlist catches facility work. The queuing and
-    product keyword rescues catch the rest, because a per-product audit found
-    that turnstiles, wayfinding and store fixtures scatter across dozens of
-    unrelated service and manufacturing codes no allowlist can enumerate --
-    14 real turnstile notices alone carried 11 different NAICS and 11
-    different PSC values.
+    Two ways in, tried in order of how much they can be trusted.
 
-    The keyword paths are domain-guarded. Federal procurement overloads our
-    vocabulary badly: "stanchion" usually means a ship's deck railing post,
-    "handrail" a grab rail on an armored vehicle, "sneeze guard" a cafeteria
-    steam table. Those are correctly excluded by domain, not by word.
+    First the classification codes, where PSC is the authority. PSC says what
+    is being bought; NAICS only says what industry the seller sits in, and the
+    two disagree constantly. A plumbing contractor filing a chiller
+    replacement carries NAICS 238220 (on our allowlist) and PSC J041 (not) --
+    the PSC is the field telling the truth. Measured over 14,137 open
+    solicitations, letting NAICS accept on its own admitted 552 such rows, of
+    which 4 contained any Lavi product language at all. So NAICS only gets a
+    vote when the agency left PSC blank, which on this extract is close to
+    never.
+
+    Then product language, for the work the codes cannot see. Agencies file
+    electronic queuing under IT codes we cannot whitelist without inheriting
+    the entire federal IT pipeline -- an audit of 29 real queuing
+    solicitations found the codes alone dropped 24, including a sole-source
+    notice for our own Qtrac. Physical product scatters just as badly: 14
+    turnstile-adjacent notices carried 11 different NAICS and 11 different
+    PSC values, several blank. No allowlist can enumerate that, so the title
+    and description get a second look.
+
+    Anything that fails both is dropped without an AI call.
     """
-    naics = (row.get("NaicsCode") or "").strip()
     psc = (row.get("ClassificationCode") or "").strip()
-    if naics in RELEVANT_NAICS:
-        return True
-    if psc and psc.startswith(RELEVANT_PSC_PREFIXES):
+    naics = (row.get("NaicsCode") or "").strip()
+
+    if psc:
+        if psc.startswith(RELEVANT_PSC_PREFIXES):
+            return True
+    elif naics in RELEVANT_NAICS:
         return True
 
     haystack = f"{row.get('Title', '')} {row.get('Description', '')}"
-
-    # Queuing terms are specific enough to skip the domain guard.
     if _QUEUING_SIGNAL.search(haystack):
         return True
-
-    if not _PRODUCT_SIGNAL.search(haystack):
-        return False
-    if _WRONG_DOMAIN_TEXT.search(haystack):
-        return False
-    if psc.startswith(_WRONG_DOMAIN_PSC) or naics.startswith(_WRONG_DOMAIN_NAICS):
-        return False
-    return True
+    return bool(_PRODUCT_SIGNAL.search(haystack))
 
 
 def _parse_posted_date(value: str) -> Optional[date]:
