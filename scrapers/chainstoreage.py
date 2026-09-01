@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 # Local imports
 from utils.scrapingbee import get_scrapingbee_client, get_soup
 import date_utils as du
+import runlog
 
 load_dotenv()
 
@@ -146,6 +147,7 @@ def get_chainstoreage_documents() -> List[Dict]:
                 # cost us the rest of the day's cards. Skip it and keep paginating
                 # -- we don't know its date, so this isn't grounds to stop early.
                 print(f"ChainStoreAge: failed to fetch {document_url}: {exc}")
+                runlog.record("article_fetch_failures", f"ChainStoreAge: {document_url}: {exc}")
                 continue
 
             date_text = _extract_date_published(document_soup)

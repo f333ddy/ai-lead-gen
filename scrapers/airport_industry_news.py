@@ -10,6 +10,7 @@ import langid
 import tldextract
 # Local import
 from utils.scrapingbee import get_scrapingbee_client, get_soup
+import runlog
 
 load_dotenv()
 
@@ -99,6 +100,7 @@ def get_airport_industry_documents(
         except Exception as exc:
             # One bad article page must not cost us the rest of the digest.
             print(f"Airport Industry News: failed to fetch {document['url']}: {exc}")
+            runlog.record("article_fetch_failures", f"Airport Industry News: {document['url']}: {exc}")
             continue
         language, confidence = langid.classify(content) if content else ("unknown", 0.0)
         document["content"] = content

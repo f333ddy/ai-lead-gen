@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from utils.scrapingbee import get_scrapingbee_client, get_soup
 import date_utils as du
 from datetime import date
+import runlog
 
 load_dotenv()
 
@@ -101,6 +102,7 @@ def get_nahb_documents() -> List[Dict]:
         except Exception as exc:
             # One bad article page must not cost us the rest of the digest.
             print(f"NAHB: failed to fetch {doc['url']}: {exc}")
+            runlog.record("article_fetch_failures", f"NAHB: {doc['url']}: {exc}")
             continue
         language, confidence = langid.classify(content)
         doc["content"] = content

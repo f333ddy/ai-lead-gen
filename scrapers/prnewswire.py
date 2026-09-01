@@ -10,6 +10,7 @@ import tldextract
 # Local imports
 import date_utils as du
 from utils.scrapingbee import get_scrapingbee_client, get_soup
+import runlog
 
 load_dotenv()
 
@@ -109,6 +110,7 @@ def get_prnewswire_documents():
         except Exception as exc:
             # One bad article page must not cost us the rest of the digest.
             print(f"PR Newswire: failed to fetch {document['url']}: {exc}")
+            runlog.record("article_fetch_failures", f"PR Newswire: {document['url']}: {exc}")
             continue
         if not content:
             continue

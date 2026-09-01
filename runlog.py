@@ -46,6 +46,25 @@ ALERT_FROM = "marketing@lavi.com"
 _log_handle = None
 _log_path: Path | None = None
 _started = False
+_crashed = False
+
+# Populated by record() during the run; drained into a summary email at exit.
+# Kept separate from the crash alert: these are failures the caller already
+# handled and moved past, not the reason the process is dying.
+_summary: dict[str, list[str]] = {}
+
+_CATEGORY_LABELS = {
+    "raw_document_failures": "Raw documents that failed to persist",
+    "gate_failures": "Eligibility gate calls that failed",
+    "persistence_failures": "Enriched documents that failed to persist",
+    "scraper_failures": "Scrapers that failed entirely",
+    "hubspot_failures": "HubSpot API calls that failed",
+    "team_email_skips": "Digests that did not send",
+    "article_fetch_failures": "Individual articles that failed to fetch",
+}
+
+# Per category, in the summary email. The full list is always in the log.
+_MAX_ITEMS_SHOWN = 20
 
 
 class _Tee:
@@ -129,6 +148,44 @@ def _send_alert(subject: str, body: str) -> None:
         print(f"[runlog] could not send alert email: {exc}")
 
 
+def record(category: str, detail: str) -> None:
+    """Note a handled failure for the end-of-run summary email.
+
+    Doesn't print -- call sites already print their own message; this only
+    adds it to the tally so isolated, individually-harmless failures (one
+    article, one team, one HubSpot call) are still visible in aggregate
+    instead of scrolling past in a log nobody opens.
+    """
+    _summary.setdefault(category, []).append(detail)
+
+
+def _build_summary_email() -> tuple[str, str] | None:
+    if not _summary:
+        return None
+    total = sum(len(items) for items in _summary.values())
+    categories = len(_summary)
+    subject = (
+        f"[Run Summary] {total} issue(s) across {categories} "
+        f"categor{'y' if categories == 1 else 'ies'}"
+    )
+    lines = [
+        "The daily lead-gen run completed without crashing, but the following",
+        "were caught, logged, and skipped along the way.",
+        "",
+        f"Log file: {_log_path}",
+        "",
+    ]
+    for category, items in _summary.items():
+        label = _CATEGORY_LABELS.get(category, category)
+        lines.append(f"--- {label} ({len(items)}) ---")
+        for item in items[:_MAX_ITEMS_SHOWN]:
+            lines.append(f"  - {item}")
+        if len(items) > _MAX_ITEMS_SHOWN:
+            lines.append(f"  ... and {len(items) - _MAX_ITEMS_SHOWN} more (see log)")
+        lines.append("")
+    return subject, "\n".join(lines)
+
+
 def _log_tail(limit: int = 60) -> str:
     if _log_path is None or not _log_path.exists():
         return "(no log file)"
@@ -139,7 +196,38 @@ def _log_tail(limit: int = 60) -> str:
     return "\n".join(lines[-limit:])
 
 
+def fatal(message: str) -> None:
+    """Abort the run immediately, with its own dedicated alert email.
+
+    For preconditions that make every subsequent minute of work worthless --
+    e.g. the HubSpot industries lookup came back empty, so every gate call
+    today would classify against nothing. Raising here as a normal exception
+    would either route through the generic crash alert (unclear about *why*
+    the run is stopping) or, for SystemExit specifically, through neither
+    alert path at all: the interpreter hands SystemExit straight to process
+    exit without ever calling sys.excepthook (verified empirically -- it is
+    not a documented guarantee). So this sends its own clear alert before
+    exiting, and marks the run "crashed" to suppress the end-of-run summary
+    email in _close(), which would otherwise fire right after and duplicate
+    the notification.
+    """
+    global _crashed
+    _crashed = True
+    print(f"\n=== FATAL -- aborting run: {message} ===")
+    sys.stdout.flush()
+    _send_alert(
+        "[FATAL] AI lead-gen run aborted before finishing its work",
+        "The daily lead-gen run stopped itself early, to avoid burning "
+        "scraping/OpenAI budget on a run whose output couldn't be trusted.\n\n"
+        f"Reason: {message}\n\n"
+        f"Log file: {_log_path}\n",
+    )
+    raise SystemExit(1)
+
+
 def _excepthook(exc_type, exc_value, exc_tb) -> None:
+    global _crashed
+    _crashed = True
     text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     print("\n=== UNHANDLED EXCEPTION -- run aborted ===")
     print(text)
@@ -185,6 +273,12 @@ def start() -> Path:
 
 def _close() -> None:
     print(f"=== run finished {datetime.now():%Y-%m-%d %H:%M:%S} ===")
+    # Not on a crash: the crash alert already covers it, and mid-run failure
+    # would leave the summary half-built anyway.
+    if not _crashed:
+        report = _build_summary_email()
+        if report is not None:
+            _send_alert(*report)
     if _log_handle is not None:
         try:
             _log_handle.flush()

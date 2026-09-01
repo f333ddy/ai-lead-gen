@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 # Local imports
 import date_utils as du
 from utils.scrapingbee import get_scrapingbee_client, get_soup
+import runlog
 
 load_dotenv()
 
@@ -149,6 +150,7 @@ def get_nacs_documents(days_back: int = 0) -> List[Dict]:
         except Exception as exc:
             # One bad article page must not cost us the rest of the digest.
             print(f"NACS: failed to fetch {doc['url']}: {exc}")
+            runlog.record("article_fetch_failures", f"NACS: {doc['url']}: {exc}")
             continue
         content = article["content"]
         if not content:

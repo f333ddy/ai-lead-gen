@@ -120,6 +120,7 @@ def build_hubspot_industries_label_to_value_map():
     except requests.RequestException as e:
         body = getattr(res, "text", "")
         print(f"Error calling HubSpot: {e} - body: {body}")
+        runlog.record("hubspot_failures", f"build_hubspot_industries_label_to_value_map: {e}")
         INDUSTRY_VALUE_TO_LABEL = {}
         return INDUSTRY_VALUE_TO_LABEL
 
@@ -151,13 +152,25 @@ def get_hubspot_industries() -> List[str]:
     except requests.RequestException as e:
         body = getattr(res, "text", "")
         print(f"Error calling HubSpot: {e} - body: {body}")
+        runlog.record("hubspot_failures", f"get_hubspot_industries: {e}")
         return []
 
     data = res.json()
     # HubSpot returns options under: data["options"] (list of {label, value, ...})
     return [opt["label"] for opt in data.get("options", []) if opt.get("label")]
 
-industries =  get_hubspot_industries()
+industries = get_hubspot_industries()
+if not industries:
+    # Every gate call classifies against this list. Continuing with zero
+    # industries wouldn't fail loudly -- every scraper and every OpenAI call
+    # would still run, then silently misclassify or reject the whole day's
+    # documents, and nobody would know until reading the digest (or its
+    # absence). Stop before any of that spends money. Runs at import time,
+    # before __main__ starts, so no scraper has been invoked yet.
+    runlog.fatal(
+        "get_hubspot_industries() returned 0 industries -- check "
+        "HUBSPOT_AUTHORIZATION and the HubSpot properties API."
+    )
 ELIGIBILITY_SCHEMA = build_eligibility_schema(industries)
 # Solicitations are judged by a separate prompt/schema pair: the news gate
 # rejects government buyers outright, which would fail nearly every SAM.gov
@@ -181,6 +194,7 @@ def get_hubspot_raw_industry_team_mappings():
         res.raise_for_status()
     except requests.HTTPError as e:
         print(f"Error calling HubSpot: {e} - body: {res.text}")
+        runlog.record("hubspot_failures", f"get_hubspot_raw_industry_team_mappings: {e}")
         return []
     data = res.json()
     return data
@@ -303,6 +317,7 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
     """
     results: List[Dict[str, Any]] = []
     gate_failures: List[str] = []
+    raw_document_failures: List[str] = []
 
     with db.connection() as conn:
         # Not fetch_enriched_urls: solicitations get amended in place, so a
@@ -322,7 +337,20 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
             title = obj.get("title", "")
             print(f"Analyzing {title}...")
 
-            raw_document_id = db.upsert_raw_document(conn, obj)
+            try:
+                raw_document_id = db.upsert_raw_document(conn, obj)
+            except Exception as exc:
+                # If we can't even record the scrape, the gate call and its
+                # enriched row would have nothing to link back to. Skip
+                # entirely rather than proceed with no raw_document_id -- the
+                # url was never written, so fetch_already_enriched won't know
+                # about it and the next run re-scrapes it from scratch, same
+                # as any other unwritten raw row.
+                conn.rollback()
+                raw_document_failures.append(title or url)
+                print(f"Failed to persist raw document for {url}: {exc}")
+                runlog.record("raw_document_failures", f"{title or url}: {exc}")
+                continue
 
             try:
                 gate_response = call_gate(
@@ -340,6 +368,7 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
                 # skip this document and the next run picks it up.
                 gate_failures.append(title or url)
                 print(f"Gate call FAILED for {url}: {exc}")
+                runlog.record("gate_failures", f"{title or url}: {exc}")
                 continue
 
             extracted = gate_response.setdefault("extracted", {})
@@ -359,6 +388,7 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
                 # rest of the run -- log it and keep going.
                 conn.rollback()
                 print(f"Failed to persist enriched document for {url}: {exc}")
+                runlog.record("persistence_failures", f"{title or url}: {exc}")
 
             if eligible and confidence >= CONFIDENCE_THRESHOLD:
                 results.append(extracted)
@@ -376,6 +406,18 @@ def test_run_eligibility_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any
             print(f"  - {name}")
         if len(gate_failures) > 10:
             print(f"  ... and {len(gate_failures) - 10} more")
+
+    if raw_document_failures:
+        # Same reasoning as gate_failures above -- these also retry next run,
+        # since the url was never written to raw_documents.
+        print(
+            f"Raw document persistence failed on {len(raw_document_failures)} "
+            "document(s) -- they were skipped and will be retried next run:"
+        )
+        for name in raw_document_failures[:10]:
+            print(f"  - {name}")
+        if len(raw_document_failures) > 10:
+            print(f"  ... and {len(raw_document_failures) - 10} more")
 
     return results
 
@@ -435,6 +477,7 @@ def send_html_email(to_emails: List[str], subject: str, html_body: str, from_ema
 
     if not recipients:
         print(f"No recipients resolved for {subject!r} - skipping send.")
+        runlog.record("team_email_skips", f"{subject!r}: no recipients resolved")
         return
 
     if not IS_PRODUCTION:
@@ -453,8 +496,16 @@ def send_html_email(to_emails: List[str], subject: str, html_body: str, from_ema
         msg["Cc"] = ", ".join(cc)
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
-    with smtplib.SMTP(hostname, 25) as server:
-        server.send_message(msg)
+    try:
+        with smtplib.SMTP(hostname, 25) as server:
+            server.send_message(msg)
+    except Exception as exc:
+        # Callers don't check this function's return value -- the per-team
+        # loop and the QA digest that follows it only survive a bad SMTP
+        # attempt if this doesn't raise.
+        print(f"Failed to send {subject!r}: {exc}")
+        runlog.record("team_email_skips", f"{subject!r}: send failed ({exc})")
+        return
 
     if IS_PRODUCTION:
         copied = f", cc {', '.join(cc)}" if cc else " (nobody to cc)"
@@ -474,9 +525,17 @@ def get_all_teams():
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
     }
-    res = requests.get(url, headers=headers)
-    data = res.json()
-    return data["results"]
+    try:
+        res = requests.get(url, headers=headers, timeout=30)
+        res.raise_for_status()
+        return res.json()["results"]
+    except Exception as e:
+        # Without this, one HubSpot blip kills every team's digest AND the
+        # QA email queued after it, since nothing downstream is isolated
+        # against test_send_emails_to_teams raising here.
+        print(f"Error calling HubSpot for teams: {e}")
+        runlog.record("hubspot_failures", f"get_all_teams: {e}")
+        return []
 
 def get_user_email(user_id: str) -> str:
     url = f"https://api.hubapi.com/settings/v3/users/{user_id}"
@@ -503,48 +562,77 @@ def test_send_emails_to_teams(team_buckets):
     team_id_to_name = {team["id"]: team["name"] for team in all_teams}
 
     for team_id, articles in team_buckets.items():
-        team = teams_by_id.get(team_id)
-        if not team:
-            print(f"Team ID {team_id} not found in HubSpot teams list.")
+        try:
+            team = teams_by_id.get(team_id)
+            if not team:
+                print(f"Team ID {team_id} not found in HubSpot teams list.")
+                runlog.record(
+                    "team_email_skips",
+                    f"team_id {team_id}: not found in HubSpot "
+                    f"({len(articles)} article(s) undelivered)",
+                )
+                continue
+            print(f"Current team: {team}")
+            # Collect all user IDs for that team
+            user_ids = set(team.get("userIds", [])) | set(team.get("secondaryUserIds", []))
+
+            # Get all user emails
+            emails = set()
+            for uid in user_ids:
+                try:
+                    email = get_user_email(uid)
+                except Exception as exc:
+                    # One bad user id must not cost the rest of this team's
+                    # roster, let alone every team queued behind it.
+                    print(f"Failed to look up HubSpot user {uid}: {exc}")
+                    runlog.record("hubspot_failures", f"get_user_email({uid}): {exc}")
+                    continue
+                if email:
+                    emails.add(email)
+            if not emails:
+                print(f"No users found for team {team_id}, skipping email.")
+                runlog.record(
+                    "team_email_skips",
+                    f"{team.get('name', team_id)}: no resolvable member emails "
+                    f"({len(articles)} article(s) undelivered)",
+                )
+                continue
+            # No hardcoded QA additions here -- development redirects everything to
+            # DEV_EMAIL_RECIPIENT inside send_html_email, and production should
+            # reach the real team only.
+            print("Emails found: ")
+            print(json.dumps(sorted(emails), indent=2))
+
+            # Send email
+            team_name = team_id_to_name[team_id]
+            count = len(articles)
+            plural = "Opportunities" if count != 1 else "Opportunity"
+            subject = f"[Business Signals] Team {team_name} - {count} New {plural} Identified"
+            template = Template(test_template_str)
+            print(json.dumps(articles, indent=2))
+            html_body = template.render(
+                title= subject,
+                intro_text="Below are newly identified business signals that may indicate near-term opportunities for your team.",
+                rows=articles
+            )
+            send_html_email(
+                to_emails=list(emails),
+                subject=subject,
+                html_body=html_body,
+            )
+
+            print(f"Digest for team {team_id} dispatched ({len(emails)} intended recipient(s)).")
+        except Exception as exc:
+            # Belt-and-suspenders: anything not already caught above (a bad
+            # template render, a malformed article dict) must not cost every
+            # team queued behind this one.
+            print(f"Unexpected error processing digest for team {team_id}: {exc}")
+            runlog.record(
+                "team_email_skips",
+                f"team_id {team_id}: unexpected error ({exc}) "
+                f"({len(articles)} article(s) undelivered)",
+            )
             continue
-        print(f"Current team: {team}")
-        # Collect all user IDs for that team
-        user_ids = set(team.get("userIds", [])) | set(team.get("secondaryUserIds", []))
-
-        # Get all user emails
-        emails = set()
-        for uid in user_ids:
-            email = get_user_email(uid)
-            if email:
-                emails.add(email)
-        if not emails:
-            print(f"No users found for team {team_id}, skipping email.")
-            continue
-        # No hardcoded QA additions here -- development redirects everything to
-        # DEV_EMAIL_RECIPIENT inside send_html_email, and production should
-        # reach the real team only.
-        print("Emails found: ")
-        print(json.dumps(sorted(emails), indent=2))
-
-        # Send email
-        team_name = team_id_to_name[team_id]
-        count = len(articles)
-        plural = "Opportunities" if count != 1 else "Opportunity"
-        subject = f"[Business Signals] Team {team_name} - {count} New {plural} Identified"
-        template = Template(test_template_str)
-        print(json.dumps(articles, indent=2))
-        html_body = template.render(
-            title= subject,
-            intro_text="Below are newly identified business signals that may indicate near-term opportunities for your team.",
-            rows=articles
-        )
-        send_html_email(
-            to_emails=list(emails),
-            subject=subject,
-            html_body=html_body,
-        )
-
-        print(f"Digest for team {team_id} dispatched ({len(emails)} intended recipient(s)).")
 
 def send_filtered_email():
     print("Going to send out filtered email...")
@@ -577,6 +665,7 @@ if __name__ == "__main__":
         docs_event_registry = get_eventregistry_documents()
     except Exception as exc:
         print(f"Event Registry scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"Event Registry: {exc}")
         docs_event_registry = []
 
     print("Starting airport industry")
@@ -584,6 +673,7 @@ if __name__ == "__main__":
         docs_airport_industry = get_airport_industry_documents()
     except Exception as exc:
         print(f"Airport Industry News scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"Airport Industry News: {exc}")
         docs_airport_industry = []
 
     print("Starting chainstoreage")
@@ -591,6 +681,7 @@ if __name__ == "__main__":
         docs_chainstoreage_docs = get_chainstoreage_documents()
     except Exception as exc:
         print(f"Chain Store Age scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"Chain Store Age: {exc}")
         docs_chainstoreage_docs = []
 
     print("Starting NACS")
@@ -598,6 +689,7 @@ if __name__ == "__main__":
         docs_nacs = get_nacs_documents()
     except Exception as exc:
         print(f"NACS scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"NACS: {exc}")
         docs_nacs = []
 
     print("Starting NAHB")
@@ -605,6 +697,7 @@ if __name__ == "__main__":
         docs_nahb = get_nahb_documents()
     except Exception as exc:
         print(f"NAHB scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"NAHB: {exc}")
         docs_nahb = []
 
     print("Starting PR Newswire")
@@ -612,6 +705,7 @@ if __name__ == "__main__":
         docs_prnewswire = get_prnewswire_documents()
     except Exception as exc:
         print(f"PR Newswire scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"PR Newswire: {exc}")
         docs_prnewswire = []
 
     print("Starting SAM.gov")
@@ -626,6 +720,7 @@ if __name__ == "__main__":
         docs_samgov = get_samgov_documents(days_back=1)
     except Exception as exc:
         print(f"SAM.gov scrape FAILED, continuing without it: {exc}")
+        runlog.record("scraper_failures", f"SAM.gov: {exc}")
         docs_samgov = []
     docs = docs_event_registry + docs_airport_industry + docs_chainstoreage_docs + docs_nacs + docs_nahb + docs_prnewswire + docs_samgov
     print("Scrapers done!")
@@ -634,5 +729,18 @@ if __name__ == "__main__":
     raw_industry_team_mappings = get_hubspot_raw_industry_team_mappings()
     industry_to_teams_map = build_industry_to_teams_map(raw_industry_team_mappings)
     team_buckets = bucket_articles_by_team(out, industry_to_teams_map)
-    test_send_emails_to_teams(team_buckets)
-    send_filtered_email()
+
+    # Independent of each other: the QA digest only depends on FILTERED_RESULTS,
+    # not on team_buckets or HubSpot teams at all, so a total failure in the
+    # team-digest path must not cost it too, and vice versa.
+    try:
+        test_send_emails_to_teams(team_buckets)
+    except Exception as exc:
+        print(f"Team digest dispatch FAILED entirely: {exc}")
+        runlog.record("team_email_skips", f"team digest dispatch aborted entirely: {exc}")
+
+    try:
+        send_filtered_email()
+    except Exception as exc:
+        print(f"QA digest FAILED: {exc}")
+        runlog.record("team_email_skips", f"QA digest aborted: {exc}")
